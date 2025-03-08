@@ -82,10 +82,31 @@ def setup_project_structure(args):
     """プロジェクト構造をセットアップします"""
     print(f"プロジェクト構造をセットアップしています...")
 
+    # 絶対パスに変換
+    output_dir_abs = os.path.abspath(args.output_dir)
+
     # 出力先ディレクトリをクリアする（必要な場合）
-    if args.clean and os.path.exists(args.output_dir):
-        print(f"出力先ディレクトリをクリアしています: {args.output_dir}")
-        shutil.rmtree(args.output_dir)
+    if args.clean and os.path.exists(output_dir_abs):
+        print(f"出力先ディレクトリをクリアしています: {output_dir_abs}")
+        try:
+            # 現在のディレクトリを保存
+            current_dir = os.getcwd()
+
+            # 現在のディレクトリが出力先ディレクトリ内にある場合は、親ディレクトリに移動
+            if current_dir.startswith(output_dir_abs):
+                parent_dir = os.path.dirname(os.path.dirname(output_dir_abs))
+                os.chdir(parent_dir)
+                print(f"安全のため、ディレクトリを変更しました: {parent_dir}")
+
+            # ディレクトリを削除
+            shutil.rmtree(output_dir_abs)
+
+            # 元のディレクトリに戻る（可能な場合）
+            if os.path.exists(current_dir) and not current_dir.startswith(output_dir_abs):
+                os.chdir(current_dir)
+        except Exception as e:
+            print(f"警告: 出力先ディレクトリのクリア中にエラーが発生しました: {e}")
+            # エラーが発生した場合でも続行
 
     # 出力先ディレクトリを作成
     ensure_directory(args.output_dir)
@@ -173,52 +194,115 @@ def analyze_swift_project(from_dir: str) -> Dict[str, Any]:
 
 def main():
     """メイン関数"""
-    args = parse_arguments()
+    try:
+        args = parse_arguments()
 
-    print("Swift から Kotlin への変換を開始します...")
-    print(f"変換元: {args.from_dir}")
-    print(f"出力先: {args.output_dir}")
-    print(f"パッケージ名: {args.package_name}")
-    print(f"アプリ名: {args.app_name}")
+        print("Swift から Kotlin への変換を開始します...")
+        print(f"変換元: {args.from_dir}")
+        print(f"出力先: {args.output_dir}")
+        print(f"パッケージ名: {args.package_name}")
+        print(f"アプリ名: {args.app_name}")
 
-    # プロジェクト構造をセットアップ
-    package_dir = setup_project_structure(args)
+        # プロジェクト構造をセットアップ
+        package_dir = setup_project_structure(args)
+        if not package_dir or not os.path.exists(package_dir):
+            print(f"エラー: パッケージディレクトリの作成に失敗しました: {package_dir}")
+            return
 
-    # Swift プロジェクトを解析
-    project_info = analyze_swift_project(args.from_dir)
+        # Swift プロジェクトを解析
+        try:
+            project_info = analyze_swift_project(args.from_dir)
+        except Exception as e:
+            print(f"警告: Swift プロジェクトの解析中にエラーが発生しました: {e}")
+            project_info = {
+                'models': [],
+                'views': [],
+                'viewmodels': [],
+                'repositories': [],
+                'services': [],
+                'resources': [],
+                'uses_firebase': False,
+                'uses_swiftdata': False,
+                'uses_combine': False,
+            }
 
-    # 各コンポーネントを変換
-    convert_models(args.from_dir, package_dir, project_info, args.package_name)
-    convert_views(args.from_dir, package_dir, project_info, args.package_name)
-    convert_viewmodels(args.from_dir, package_dir, project_info, args.package_name)
-    convert_repositories(args.from_dir, package_dir, project_info, args.package_name)
-    convert_services(args.from_dir, package_dir, project_info, args.package_name)
+        # 各コンポーネントを変換
+        try:
+            convert_models(args.from_dir, package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: モデルの変換中にエラーが発生しました: {e}")
 
-    # 依存性注入をセットアップ
-    setup_dependency_injection(package_dir, project_info, args.package_name)
+        try:
+            convert_views(args.from_dir, package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: ビューの変換中にエラーが発生しました: {e}")
 
-    # Firebase をセットアップ（必要な場合）
-    if project_info['uses_firebase']:
-        setup_firebase(args.output_dir, args.package_name)
+        try:
+            convert_viewmodels(args.from_dir, package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: ViewModelの変換中にエラーが発生しました: {e}")
 
-    # データベースをセットアップ（SwiftData を使用している場合）
-    if project_info['uses_swiftdata']:
-        setup_database(args.output_dir, package_dir, project_info, args.package_name)
+        try:
+            convert_repositories(args.from_dir, package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: リポジトリの変換中にエラーが発生しました: {e}")
 
-    # ネットワークをセットアップ
-    setup_network(package_dir, project_info, args.package_name)
+        try:
+            convert_services(args.from_dir, package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: サービスの変換中にエラーが発生しました: {e}")
 
-    # リソースを変換
-    convert_resources(args.from_dir, args.output_dir, project_info)
+        # 依存性注入をセットアップ
+        try:
+            setup_dependency_injection(package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: 依存性注入のセットアップ中にエラーが発生しました: {e}")
 
-    # AndroidManifest.xml を生成
-    generate_manifest(args.output_dir, args.package_name, args.app_name)
+        # Firebase をセットアップ（必要な場合）
+        if project_info.get('uses_firebase', False):
+            try:
+                setup_firebase(args.output_dir, args.package_name)
+            except Exception as e:
+                print(f"警告: Firebaseのセットアップ中にエラーが発生しました: {e}")
 
-    # Gradle ファイルをセットアップ
-    setup_gradle(args.output_dir, project_info, args.package_name, args.app_name)
+        # データベースをセットアップ（SwiftData を使用している場合）
+        if project_info.get('uses_swiftdata', False):
+            try:
+                setup_database(args.output_dir, package_dir, project_info, args.package_name)
+            except Exception as e:
+                print(f"警告: データベースのセットアップ中にエラーが発生しました: {e}")
 
-    print("変換が完了しました！")
-    print(f"生成されたプロジェクトは {args.output_dir} にあります。")
+        # ネットワークをセットアップ
+        try:
+            setup_network(package_dir, project_info, args.package_name)
+        except Exception as e:
+            print(f"警告: ネットワークのセットアップ中にエラーが発生しました: {e}")
+
+        # リソースを変換
+        try:
+            convert_resources(args.from_dir, args.output_dir, project_info)
+        except Exception as e:
+            print(f"警告: リソースの変換中にエラーが発生しました: {e}")
+
+        # AndroidManifest.xml を生成
+        try:
+            generate_manifest(args.output_dir, args.package_name, args.app_name)
+        except Exception as e:
+            print(f"警告: AndroidManifest.xmlの生成中にエラーが発生しました: {e}")
+
+        # Gradle ファイルをセットアップ
+        try:
+            # Gradleファイルをセットアップ
+            setup_gradle(args.output_dir, project_info, args.package_name, args.app_name)
+        except Exception as e:
+            print(f"警告: Gradleファイルのセットアップ中にエラーが発生しました: {e}")
+
+        print("変換が完了しました！")
+        print(f"生成されたプロジェクトは {args.output_dir} にあります。")
+    except Exception as e:
+        print(f"エラー: 変換処理中に予期しないエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

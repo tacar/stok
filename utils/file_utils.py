@@ -40,11 +40,20 @@ def write_file(file_path: str, content: str) -> None:
         file_path: 書き込むファイルのパス
         content: 書き込む内容
     """
-    # ディレクトリが存在しない場合は作成
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    # 絶対パスに変換
+    file_path_abs = os.path.abspath(file_path)
 
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        # ディレクトリが存在しない場合は作成
+        dir_path = os.path.dirname(file_path_abs)
+        os.makedirs(dir_path, exist_ok=True)
+
+        # ファイルに書き込み
+        with open(file_path_abs, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except Exception as e:
+        print(f"警告: ファイルの書き込み中にエラーが発生しました: {file_path_abs}: {e}")
+        # エラーが発生した場合でも続行
 
 def copy_file(src: str, dst: str) -> None:
     """
@@ -71,23 +80,45 @@ def copy_directory(src: str, dst: str, exclude: Optional[List[str]] = None) -> N
     if exclude is None:
         exclude = []
 
+    # 絶対パスに変換
+    src_abs = os.path.abspath(src)
+    dst_abs = os.path.abspath(dst)
+
+    # コピー元が存在しない場合はエラー
+    if not os.path.exists(src_abs):
+        print(f"警告: コピー元ディレクトリが存在しません: {src_abs}")
+        return
+
     # コピー先のディレクトリが存在しない場合は作成
-    os.makedirs(dst, exist_ok=True)
+    try:
+        os.makedirs(dst_abs, exist_ok=True)
+    except Exception as e:
+        print(f"警告: コピー先ディレクトリの作成中にエラーが発生しました: {e}")
+        return
 
-    for item in os.listdir(src):
-        # 除外リストにあるアイテムはスキップ
-        if item in exclude:
-            continue
+    # ディレクトリ内の各アイテムをコピー
+    try:
+        for item in os.listdir(src_abs):
+            # 除外リストにあるアイテムはスキップ
+            if item in exclude:
+                continue
 
-        s = os.path.join(src, item)
-        d = os.path.join(dst, item)
+            s = os.path.join(src_abs, item)
+            d = os.path.join(dst_abs, item)
 
-        if os.path.isdir(s):
-            copy_directory(s, d, exclude)
-        else:
-            # コピー先のディレクトリが存在しない場合は作成
-            os.makedirs(os.path.dirname(d), exist_ok=True)
-            shutil.copy2(s, d)
+            try:
+                if os.path.isdir(s):
+                    copy_directory(s, d, exclude)
+                else:
+                    # コピー先のディレクトリが存在しない場合は作成
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    shutil.copy2(s, d)
+            except Exception as e:
+                print(f"警告: アイテムのコピー中にエラーが発生しました: {s} -> {d}: {e}")
+                # 個別のアイテムのエラーは無視して続行
+    except Exception as e:
+        print(f"警告: ディレクトリのコピー中にエラーが発生しました: {src_abs} -> {dst_abs}: {e}")
+        # エラーが発生した場合でも可能な限り続行
 
 def get_file_extension(file_path: str) -> str:
     """

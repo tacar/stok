@@ -27,8 +27,7 @@ def generate_manifest(output_dir: str, package_name: str, app_name: str) -> None
     # AndroidManifest.xml の内容
     manifest_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="{package_name}">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- インターネット接続のパーミッション -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -43,19 +42,28 @@ def generate_manifest(output_dir: str, package_name: str, app_name: str) -> None
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MyApp"
+        android:theme="@style/Theme.{app_name}"
         tools:targetApi="31">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.MyApp">
+            android:theme="@style/Theme.{app_name}">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Firebase Messaging Service -->
+        <service
+            android:name=".services.FirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
     </application>
 
@@ -66,11 +74,26 @@ def generate_manifest(output_dir: str, package_name: str, app_name: str) -> None
     write_file(manifest_path, manifest_content)
     print(f"AndroidManifest.xml を生成しました: {manifest_path}")
 
-    # MyApplication.kt を生成
+    # アプリケーションクラスを生成
     generate_application_class(output_dir, package_name)
 
-    # MainActivity.kt を生成
+    # メインアクティビティを生成
     generate_main_activity(output_dir, package_name)
+
+    # ナビゲーションを生成
+    generate_navigation(output_dir, package_name)
+
+    # テーマを生成
+    generate_theme(output_dir, package_name)
+
+    # カラーを生成
+    generate_colors(output_dir, package_name)
+
+    # タイポグラフィを生成
+    generate_typography(output_dir, package_name)
+
+    # FirebaseMessagingServiceを生成
+    generate_firebase_messaging_service(output_dir, package_name)
 
     # data_extraction_rules.xml を生成
     generate_data_extraction_rules(output_dir)
@@ -644,3 +667,128 @@ def generate_backup_rules(output_dir: str) -> None:
     # backup_rules.xml を書き込み
     write_file(rules_path, rules_content)
     print(f"backup_rules.xml を生成しました: {rules_path}")
+
+def generate_firebase_messaging_service(output_dir: str, package_name: str) -> None:
+    """
+    FirebaseMessagingServiceを生成します。
+
+    Args:
+        output_dir: 出力先ディレクトリ
+        package_name: Android アプリのパッケージ名
+    """
+    # FirebaseMessagingServiceのパス
+    service_path = os.path.join(output_dir, f'app/src/main/java/{package_name.replace(".", "/")}/services/FirebaseMessagingService.kt')
+
+    # サービスを格納するディレクトリを作成
+    os.makedirs(os.path.dirname(service_path), exist_ok=True)
+
+    # FirebaseMessagingServiceの内容
+    service_content = f"""package {package_name}.services
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.media.RingtoneManager
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import com.google.firebase.messaging.FirebaseMessagingService
+import com.google.firebase.messaging.RemoteMessage
+import {package_name}.MainActivity
+import {package_name}.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+class FirebaseMessagingService : FirebaseMessagingService() {{
+
+    /**
+     * 新しいトークンが生成されたときに呼び出されます。
+     */
+    override fun onNewToken(token: String) {{
+        println("Refreshed token: $token")
+
+        // トークンをサーバーに送信するなどの処理を行う
+        sendRegistrationToServer(token)
+    }}
+
+    /**
+     * メッセージを受信したときに呼び出されます。
+     */
+    override fun onMessageReceived(remoteMessage: RemoteMessage) {{
+        println("From: ${{remoteMessage.from}}")
+
+        // メッセージにデータペイロードがある場合
+        remoteMessage.data.isNotEmpty().let {{
+            println("Message data payload: ${{remoteMessage.data}}")
+
+            // 長時間実行する処理が必要な場合はバックグラウンドで実行
+            CoroutineScope(Dispatchers.IO).launch {{
+                handleNow(remoteMessage.data)
+            }}
+        }}
+
+        // メッセージに通知ペイロードがある場合
+        remoteMessage.notification?.let {{
+            println("Message Notification Body: ${{it.body}}")
+            sendNotification(it.title ?: "通知", it.body ?: "新しいメッセージがあります")
+        }}
+    }}
+
+    /**
+     * データペイロードを処理します。
+     */
+    private fun handleNow(data: Map<String, String>) {{
+        // ここでデータペイロードを処理する
+        println("Short lived task is done.")
+    }}
+
+    /**
+     * トークンをサーバーに送信します。
+     */
+    private fun sendRegistrationToServer(token: String) {{
+        // ここでトークンをサーバーに送信する処理を実装
+        println("sendRegistrationTokenToServer($token)")
+    }}
+
+    /**
+     * 通知を表示します。
+     */
+    private fun sendNotification(title: String, messageBody: String) {{
+        val intent = Intent(this, MainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val channelId = "fcm_default_channel"
+        val defaultSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val notificationBuilder = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(messageBody)
+            .setAutoCancel(true)
+            .setSound(defaultSoundUri)
+            .setContentIntent(pendingIntent)
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Android Oreo以降では通知チャンネルが必要
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+            val channel = NotificationChannel(
+                channelId,
+                "Channel human readable title",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            notificationManager.createNotificationChannel(channel)
+        }}
+
+        notificationManager.notify(0, notificationBuilder.build())
+    }}
+}}"""
+
+    # FirebaseMessagingServiceを書き込み
+    write_file(service_path, service_content)
+    print(f"FirebaseMessagingServiceを生成しました: {service_path}")
