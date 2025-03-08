@@ -156,28 +156,33 @@ sqldelight {{
                 content
             )
 
-            # SQLDelightのリポジトリを追加
-            repositories_pattern = r'dependencyResolutionManagement\s*\{[^{]*repositories\s*\{([^}]*)\}'
-            repositories_match = re.search(repositories_pattern, content)
-            if repositories_match:
-                repositories_block = repositories_match.group(1)
-                # SQLDelightのリポジトリを追加
-                if 'google()' in repositories_block and 'mavenCentral()' in repositories_block:
-                    # 既にgoogleとmavenCentralがある場合は追加のリポジトリを追加
-                    if 'maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots/") }' not in repositories_block:
-                        modified_repositories_block = repositories_block.rstrip() + '\n        maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots/") }\n'
-                        content = content.replace(repositories_block, modified_repositories_block)
-                else:
-                    # 基本的なリポジトリを追加
-                    modified_repositories_block = """
+            # settings.gradle.ktsを完全に書き直す（構文エラーを防ぐため）
+            settings_content = f"""// settings.gradle.kts
+pluginManagement {{
+    repositories {{
         google()
         mavenCentral()
-        maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots/") }
-"""
-                    content = content.replace(repositories_block, modified_repositories_block)
+        gradlePluginPortal()
+        maven(url = "https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    }}
+}}
 
-            write_file(dst_settings_gradle, content)
-            print(f"settings.gradle.kts をコピーしました: {dst_settings_gradle}")
+dependencyResolutionManagement {{
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {{
+        google()
+        mavenCentral()
+        maven {{ url = uri("https://oss.sonatype.org/content/repositories/snapshots/") }}
+        maven(url = "https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    }}
+}}
+
+rootProject.name = "{app_name.lower()}"
+include(":app")
+enableFeaturePreview("STABLE_CONFIGURATION_CACHE")
+"""
+            write_file(dst_settings_gradle, settings_content)
+            print(f"settings.gradle.kts を作成しました: {dst_settings_gradle}")
         else:
             print(f"警告: tmpkotlinのsettings.gradle.ktsが見つかりません: {src_settings_gradle}")
 
@@ -255,6 +260,79 @@ sqldelight {{
             print(f"gradlew.bat をコピーしました: {dst_gradlew_bat}")
         else:
             print(f"警告: tmpkotlinのgradlew.batが見つかりません: {src_gradlew_bat}")
+
+        # 10. google-services.json をコピー
+        src_google_services = os.path.join(tmpkotlin_dir, 'app/google-services.json')
+        dst_google_services = os.path.join(output_dir, 'app/google-services.json')
+        if os.path.exists(src_google_services):
+            import shutil
+            shutil.copy2(src_google_services, dst_google_services)
+            print(f"google-services.json をコピーしました: {dst_google_services}")
+
+            # google-services.jsonファイル内のパッケージ名を更新
+            try:
+                import json
+                with open(dst_google_services, 'r') as f:
+                    google_services_data = json.load(f)
+
+                # クライアント情報のパッケージ名を更新
+                if 'client' in google_services_data and len(google_services_data['client']) > 0:
+                    for client in google_services_data['client']:
+                        if 'client_info' in client and 'android_client_info' in client['client_info']:
+                            client['client_info']['android_client_info']['package_name'] = package_name
+
+                # 更新したデータを書き込み
+                with open(dst_google_services, 'w') as f:
+                    json.dump(google_services_data, f, indent=2)
+
+                print(f"google-services.json のパッケージ名を {package_name} に更新しました")
+            except Exception as e:
+                print(f"警告: google-services.json の更新中にエラーが発生しました: {e}")
+        else:
+            print(f"警告: tmpkotlinのgoogle-services.jsonが見つかりません: {src_google_services}")
+
+            # google-services.jsonがない場合は、Firebaseプラグインを無効化
+            try:
+                # app/build.gradle.ktsからFirebaseプラグインを無効化
+                app_build_gradle = os.path.join(output_dir, 'app/build.gradle.kts')
+                if os.path.exists(app_build_gradle):
+                    content = read_file(app_build_gradle)
+
+                    # Firebaseプラグインを無効化（コメントアウト）
+                    content = content.replace('id("com.google.gms.google-services")', '// id("com.google.gms.google-services")')
+                    content = content.replace('id("com.google.firebase.crashlytics")', '// id("com.google.firebase.crashlytics")')
+
+                    # Firebase依存関係をコメントアウト
+                    content = re.sub(
+                        r'(implementation\(platform\(libs\.firebase\.bom\)\))',
+                        r'// \1',
+                        content
+                    )
+                    content = re.sub(
+                        r'(implementation\(libs\.firebase\.[^)]+\))',
+                        r'// \1',
+                        content
+                    )
+                    content = re.sub(
+                        r'(implementation\("com\.google\.firebase:[^)]+\))',
+                        r'// \1',
+                        content
+                    )
+                    content = re.sub(
+                        r'(implementation\("com\.firebaseui:[^)]+\))',
+                        r'// \1',
+                        content
+                    )
+                    content = re.sub(
+                        r'(implementation\("com\.google\.android\.datatransport:[^)]+\))',
+                        r'// \1',
+                        content
+                    )
+
+                    write_file(app_build_gradle, content)
+                    print("Firebaseプラグインと依存関係を無効化しました")
+            except Exception as e:
+                print(f"警告: Firebaseプラグインの無効化中にエラーが発生しました: {e}")
 
         print("Gradle 設定が完了しました。")
     except Exception as e:
