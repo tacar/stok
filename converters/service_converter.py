@@ -90,7 +90,8 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
         "import io.ktor.client.features.json.*",
         "import io.ktor.client.features.json.serializer.*",
         "import io.ktor.client.request.*",
-        "import io.ktor.http.*"
+        "import io.ktor.http.*",
+        "import javax.inject.Inject"
     ])
 
     lines.append("")
@@ -112,6 +113,10 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
             method_name, parameters, return_type
         )
 
+        # None型をUnitに変換
+        if kotlin_return_type == 'None':
+            kotlin_return_type = 'Unit'
+
         # メソッド定義
         if kotlin_parameters:
             lines.append(f"    suspend fun {kotlin_method_name}({kotlin_parameters}): {kotlin_return_type}")
@@ -123,7 +128,7 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
 
     # 実装クラス
     lines.extend([
-        f"class {class_name}Impl : {interface_name} {{",
+        f"class {class_name}Impl @Inject constructor() : {interface_name} {{",
         "    private val client = HttpClient(Android) {",
         "        install(JsonFeature) {",
         "            serializer = KotlinxSerializer(kotlinx.serialization.json.Json {",
@@ -153,6 +158,10 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
         kotlin_method_name, kotlin_parameters, kotlin_return_type = swift_method_to_kotlin(
             method_name, parameters, return_type
         )
+
+        # None型をUnitに変換
+        if kotlin_return_type == 'None':
+            kotlin_return_type = 'Unit'
 
         # メソッド実装
         if kotlin_parameters:

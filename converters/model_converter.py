@@ -93,7 +93,35 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
         for i, prop in enumerate(model_info['properties']):
             prop_name = prop['name']
             swift_type = prop['type']
-            kotlin_type = swift_type_to_kotlin(swift_type)
+
+            # 特殊なジェネリック型パターンを処理
+            if ":" in swift_type and not "=" in swift_type:
+                # List<UUID: Bool> → Map<UUID, Boolean> のような変換
+                if swift_type.startswith("List<") and ":" in swift_type:
+                    pattern = r'List<(\w+):\s*(\w+)>'
+                    match = re.match(pattern, swift_type)
+                    if match:
+                        key_type = match.group(1)
+                        value_type = match.group(2)
+                        kotlin_key_type = swift_type_to_kotlin(key_type)
+                        kotlin_value_type = swift_type_to_kotlin(value_type)
+                        kotlin_type = f"Map<{kotlin_key_type}, {kotlin_value_type}>"
+                    else:
+                        kotlin_type = swift_type_to_kotlin(swift_type)
+                else:
+                    # T: Value のような形式を処理
+                    pattern = r'(\w+):\s*(\w+)'
+                    match = re.match(pattern, swift_type)
+                    if match:
+                        key_type = match.group(1)
+                        value_type = match.group(2)
+                        kotlin_key_type = swift_type_to_kotlin(key_type)
+                        kotlin_value_type = swift_type_to_kotlin(value_type)
+                        kotlin_type = f"Map<{kotlin_key_type}, {kotlin_value_type}>"
+                    else:
+                        kotlin_type = swift_type_to_kotlin(swift_type)
+            else:
+                kotlin_type = swift_type_to_kotlin(swift_type)
 
             # val または var を決定
             val_or_var = "val"

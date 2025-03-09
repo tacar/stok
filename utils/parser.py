@@ -227,6 +227,27 @@ def swift_type_to_kotlin(swift_type: str) -> str:
     Returns:
         Kotlin の型
     """
+    # 特殊なSwiftジェネリック型パターンを修正
+    # List<UUID: Bool> → List<Map<UUID, Boolean>> のような変換
+    special_generic_pattern = r'List<(\w+):\s*(\w+)>'
+    special_generic_match = re.match(special_generic_pattern, swift_type)
+    if special_generic_match:
+        key_type = special_generic_match.group(1)
+        value_type = special_generic_match.group(2)
+        kotlin_key_type = swift_type_to_kotlin(key_type)
+        kotlin_value_type = swift_type_to_kotlin(value_type)
+        return f"Map<{kotlin_key_type}, {kotlin_value_type}>"
+
+    # T: Value のようなジェネリック型パターンを修正
+    special_generic_pattern2 = r'(\w+):\s*(\w+)'
+    special_generic_match2 = re.match(special_generic_pattern2, swift_type)
+    if special_generic_match2:
+        key_type = special_generic_match2.group(1)
+        value_type = special_generic_match2.group(2)
+        kotlin_key_type = swift_type_to_kotlin(key_type)
+        kotlin_value_type = swift_type_to_kotlin(value_type)
+        return f"Map<{kotlin_key_type}, {kotlin_value_type}>"
+
     # 基本的な型の変換
     type_mapping = {
         'String': 'String',
@@ -251,6 +272,9 @@ def swift_type_to_kotlin(swift_type: str) -> str:
         '[Int]': 'List<Int>',
         '[String: Any]': 'Map<String, Any>',
         '[String: String]': 'Map<String, String>',
+        'None': 'Unit',  # Swift の None を Kotlin の Unit に変換
+        'T': 'T',  # ジェネリック型パラメータ
+        'Value': 'Any',  # 一般的な値型
     }
 
     # オプショナル型の処理
@@ -321,6 +345,18 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
         param_parts = []
         for param in parameters.split(','):
             param = param.strip()
+
+            # Swift特有のアンダースコアパラメータを処理
+            if param.startswith('_'):
+                param = param[1:].strip()
+
+            # didFailToReceiveAdWithError error: Error のような形式を処理
+            if ' ' in param and ':' in param:
+                parts = param.split(' ')
+                last_part = parts[-1]
+                if ':' in last_part:
+                    param = last_part
+
             if ':' in param:
                 # Swift のパラメータ形式: name: Type または label name: Type
                 parts = param.split(':')
@@ -347,5 +383,9 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
     kotlin_return_type = None
     if return_type:
         kotlin_return_type = swift_type_to_kotlin(return_type)
+
+        # None型をUnitに変換
+        if kotlin_return_type == 'None':
+            kotlin_return_type = 'Unit'
 
     return kotlin_method_name, kotlin_parameters, kotlin_return_type

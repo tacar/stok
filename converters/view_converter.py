@@ -42,8 +42,11 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
         swift_content = read_file(full_path)
         view_info = parse_swift_file(swift_content)
 
+        # SwiftUIのbodyブロックを抽出
+        body_content = extract_body_content(swift_content)
+
         # Jetpack Compose のビューを生成
-        kotlin_content = generate_compose_view(view_info, package_name)
+        kotlin_content = generate_compose_view(view_info, package_name, body_content)
 
         # ファイル名を決定
         filename = get_filename(view_path)
@@ -60,6 +63,27 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
         write_file(kotlin_path, kotlin_content)
 
         print(f"ビューを変換しました: {kotlin_path}")
+
+def extract_body_content(swift_content: str) -> str:
+    """
+    SwiftUIのビューからbodyブロックの内容を抽出します。
+
+    Args:
+        swift_content: SwiftUIのコード
+
+    Returns:
+        bodyブロックの内容、見つからない場合は空文字列
+    """
+    # var body: some View { ... } または var body: View { ... } パターンを検索
+    body_pattern = r'var\s+body\s*:\s*(?:some\s+)?View\s*\{([\s\S]*?)(?:\n\s*\}|\}$)'
+    body_match = re.search(body_pattern, swift_content)
+
+    if body_match:
+        # bodyブロックの内容を取得
+        body_content = body_match.group(1).strip()
+        return body_content
+
+    return ""
 
 def is_screen_view(filename: str, content: str) -> bool:
     """
@@ -102,13 +126,14 @@ def is_screen_view(filename: str, content: str) -> bool:
     # デフォルトでは画面として扱う
     return True
 
-def generate_compose_view(view_info: Dict[str, Any], package_name: str) -> str:
+def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_content: str = "") -> str:
     """
     SwiftUI のビュー情報から Jetpack Compose のビューを生成します。
 
     Args:
         view_info: SwiftUI ビューの情報
         package_name: Android アプリのパッケージ名
+        body_content: SwiftUIのbodyブロックの内容
 
     Returns:
         生成された Jetpack Compose のコード
@@ -133,6 +158,14 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str) -> str:
         "import androidx.compose.ui.Alignment",
         "import androidx.compose.ui.Modifier",
         "import androidx.compose.ui.unit.dp",
+        "import androidx.compose.ui.tooling.preview.Preview",
+        "import androidx.compose.foundation.Image",
+        "import androidx.compose.ui.res.painterResource",
+        "import androidx.compose.ui.text.style.TextAlign",
+        "import androidx.compose.ui.graphics.Color",
+        "import coil.compose.rememberAsyncImagePainter",
+        "import androidx.compose.material.icons.Icons",
+        "import androidx.compose.material.icons.filled.*",
         "import androidx.lifecycle.viewmodel.compose.viewModel",
         f"import {package_name}.viewmodels.*",
         f"import {package_name}.models.*",
@@ -171,19 +204,67 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str) -> str:
         "        modifier = modifier.fillMaxSize(),",
         "        color = MaterialTheme.colorScheme.background",
         "    ) {",
-        "        Column(",
-        "            modifier = Modifier",
-        "                .fillMaxSize()",
-        "                .padding(16.dp),",
-        "            horizontalAlignment = Alignment.CenterHorizontally,",
-        "            verticalArrangement = Arrangement.Center",
-        "        ) {",
-        "            // TODO: ここにコンテンツを追加",
-        "            Text(text = \"Hello, Compose!\")",
-        "        }",
+        "        // SwiftUIのビュー構造をJetpack Composeに変換",
+        "        MainContent()",
         "    }",
-        "}"
+        "}",
+        "",
+        "@Composable",
+        "private fun MainContent() {"
     ])
+
+    # bodyの内容があれば変換して追加
+    if body_content:
+        # SwiftUIのコードをJetpack Composeに変換
+        compose_content = convert_swiftui_to_compose(body_content)
+
+        # インデントを追加
+        compose_lines = compose_content.split('\n')
+        indented_compose_lines = ['    ' + line for line in compose_lines]
+
+        lines.extend(indented_compose_lines)
+    else:
+        # デフォルトのコンテンツ
+        lines.extend([
+            "    Column(",
+            "        modifier = Modifier",
+            "            .fillMaxSize()",
+            "            .padding(16.dp),",
+            "        horizontalAlignment = Alignment.CenterHorizontally,",
+            "        verticalArrangement = Arrangement.Center",
+            "    ) {",
+            "        // TODO: SwiftUIのコードから変換されたコンテンツ",
+            "        // 以下は一般的なSwiftUIコンポーネントのJetpack Compose対応例",
+            "        ",
+            "        // Text(\"Hello, World!\") → Text(text = \"Hello, World!\")",
+            "        Text(",
+            "            text = \"Hello, Compose!\",",
+            "            style = MaterialTheme.typography.headlineMedium",
+            "        )",
+            "        ",
+            "        Spacer(modifier = Modifier.height(16.dp))",
+            "        ",
+            "        // Button(action: { ... }) { Text(\"Click me\") } →",
+            "        // Button(onClick = { ... }) { Text(text = \"Click me\") }",
+            "        Button(",
+            "            onClick = { /* TODO: アクション */ }",
+            "        ) {",
+            "            Text(text = \"Click me\")",
+            "        }",
+            "        ",
+            "        Spacer(modifier = Modifier.height(16.dp))",
+            "        ",
+            "        // Image(\"image_name\") → Image(painter = painterResource(id = R.drawable.image_name), ...)",
+            "        // 注意: 画像リソースは手動で追加する必要があります",
+            "        // Image(",
+            "        //     painter = painterResource(id = R.drawable.placeholder),",
+            "        //     contentDescription = \"サンプル画像\",",
+            "        //     modifier = Modifier.size(100.dp)",
+            "        // )",
+            "    }"
+        ])
+
+    lines.append("}")
 
     # プレビュー関数
     lines.extend([
@@ -198,3 +279,163 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str) -> str:
     ])
 
     return "\n".join(lines)
+
+def convert_swiftui_to_compose(swift_code: str) -> str:
+    """
+    SwiftUIのコードをJetpack Composeのコードに変換します。
+
+    Args:
+        swift_code: SwiftUIのコード
+
+    Returns:
+        変換されたJetpack Composeのコード
+    """
+    compose_code = []
+
+    # SwiftUIの主要コンポーネントの変換マッピング
+    component_mappings = {
+        # テキスト
+        r'Text\("([^"]+)"\)': lambda m: f'Text(text = "{m.group(1)}")',
+        r'Text\("([^"]+)"\)\.font\(\.(\w+)\)': lambda m: f'Text(text = "{m.group(1)}", style = MaterialTheme.typography.{map_font_style(m.group(2))})',
+        r'Text\("([^"]+)"\)\.foregroundColor\(\.(\w+)\)': lambda m: f'Text(text = "{m.group(1)}", color = {map_color(m.group(2))})',
+
+        # ボタン
+        r'Button\("([^"]+)"\)\s*{\s*([^}]+)\s*}': lambda m: f'Button(onClick = {{ {convert_action(m.group(2))} }}) {{ Text(text = "{m.group(1)}") }}',
+        r'Button\(action:\s*{\s*([^}]+)\s*}\)\s*{\s*Text\("([^"]+)"\)\s*}': lambda m: f'Button(onClick = {{ {convert_action(m.group(1))} }}) {{ Text(text = "{m.group(2)}") }}',
+
+        # 画像
+        r'Image\("([^"]+)"\)': lambda m: f'Image(painter = painterResource(id = R.drawable.{m.group(1)}), contentDescription = null)',
+        r'Image\(systemName:\s*"([^"]+)"\)': lambda m: f'Icon(imageVector = Icons.Default.{map_system_icon(m.group(1))}, contentDescription = null)',
+
+        # レイアウト
+        r'VStack(\([^)]*\))?\s*{': 'Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {',
+        r'HStack(\([^)]*\))?\s*{': 'Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {',
+        r'ZStack(\([^)]*\))?\s*{': 'Box(modifier = Modifier.fillMaxWidth()) {',
+
+        # スペーサー
+        r'Spacer\(\)': 'Spacer(modifier = Modifier.weight(1f))',
+        r'Spacer\(\).frame\(height:\s*(\d+)\)': lambda m: f'Spacer(modifier = Modifier.height({m.group(1)}.dp))',
+        r'Spacer\(\).frame\(width:\s*(\d+)\)': lambda m: f'Spacer(modifier = Modifier.width({m.group(1)}.dp))',
+
+        # パディング
+        r'\.padding\((\d+)\)': lambda m: f'.padding({m.group(1)}.dp)',
+        r'\.padding\(\[\.(\w+), \.(\w+)\], (\d+)\)': lambda m: f'.padding({map_edge_insets(m.group(1), m.group(2), m.group(3))})',
+
+        # フレーム
+        r'\.frame\(width:\s*(\d+),\s*height:\s*(\d+)\)': lambda m: f'.size({m.group(1)}.dp, {m.group(2)}.dp)',
+        r'\.frame\(width:\s*(\d+)\)': lambda m: f'.width({m.group(1)}.dp)',
+        r'\.frame\(height:\s*(\d+)\)': lambda m: f'.height({m.group(1)}.dp)',
+
+        # 背景色
+        r'\.background\(Color\.(\w+)\)': lambda m: f'.background({map_color(m.group(1))})',
+    }
+
+    # 行ごとに処理
+    lines = swift_code.split('\n')
+    for line in lines:
+        # インデントを保持
+        indent = len(line) - len(line.lstrip())
+        indent_str = ' ' * indent
+        line = line.strip()
+
+        # 各マッピングを適用
+        for pattern, replacement in component_mappings.items():
+            if callable(replacement):
+                line = re.sub(pattern, replacement, line)
+            else:
+                line = re.sub(pattern, replacement, line)
+
+        compose_code.append(indent_str + line)
+
+    return '\n'.join(compose_code)
+
+def map_font_style(swift_font: str) -> str:
+    """SwiftUIのフォントスタイルをMaterial3のタイポグラフィスタイルにマッピングします"""
+    mapping = {
+        'largeTitle': 'displayLarge',
+        'title': 'headlineLarge',
+        'title2': 'headlineMedium',
+        'title3': 'headlineSmall',
+        'headline': 'titleLarge',
+        'subheadline': 'titleMedium',
+        'body': 'bodyLarge',
+        'callout': 'bodyMedium',
+        'footnote': 'bodySmall',
+        'caption': 'labelSmall',
+    }
+    return mapping.get(swift_font, 'bodyMedium')
+
+def map_color(swift_color: str) -> str:
+    """SwiftUIの色をJetpack Composeの色にマッピングします"""
+    mapping = {
+        'red': 'Color.Red',
+        'blue': 'Color.Blue',
+        'green': 'Color.Green',
+        'yellow': 'Color.Yellow',
+        'orange': 'Color.hsl(25f, 1f, 0.5f)',
+        'purple': 'Color(0xFF9C27B0)',
+        'pink': 'Color(0xFFE91E63)',
+        'primary': 'MaterialTheme.colorScheme.primary',
+        'secondary': 'MaterialTheme.colorScheme.secondary',
+        'black': 'Color.Black',
+        'white': 'Color.White',
+        'gray': 'Color.Gray',
+    }
+    return mapping.get(swift_color, 'Color.Black')
+
+def map_system_icon(system_name: str) -> str:
+    """SwiftUIのシステムアイコン名をMaterial Iconsにマッピングします"""
+    mapping = {
+        'person': 'Person',
+        'house': 'Home',
+        'gear': 'Settings',
+        'bell': 'Notifications',
+        'star': 'Star',
+        'heart': 'Favorite',
+        'magnifyingglass': 'Search',
+        'plus': 'Add',
+        'minus': 'Remove',
+        'trash': 'Delete',
+        'folder': 'Folder',
+        'doc': 'Description',
+        'envelope': 'Email',
+        'phone': 'Phone',
+        'lock': 'Lock',
+        'key': 'Key',
+    }
+    return mapping.get(system_name, 'Info')
+
+def map_edge_insets(edge1: str, edge2: str, value: str) -> str:
+    """SwiftUIのエッジインセットをJetpack Composeのパディングにマッピングします"""
+    edges = {edge1, edge2}
+
+    if edges == {'top', 'bottom'}:
+        return f'vertical = {value}.dp'
+    elif edges == {'leading', 'trailing'} or edges == {'left', 'right'}:
+        return f'horizontal = {value}.dp'
+    else:
+        # 個別のエッジを処理
+        padding_parts = []
+        if 'top' in edges:
+            padding_parts.append(f'top = {value}.dp')
+        if 'bottom' in edges:
+            padding_parts.append(f'bottom = {value}.dp')
+        if 'leading' in edges or 'left' in edges:
+            padding_parts.append(f'start = {value}.dp')
+        if 'trailing' in edges or 'right' in edges:
+            padding_parts.append(f'end = {value}.dp')
+
+        return ', '.join(padding_parts)
+
+def convert_action(swift_action: str) -> str:
+    """SwiftUIのアクションをJetpack Composeのラムダにマッピングします"""
+    # 基本的な変換
+    kotlin_action = swift_action.strip()
+
+    # self.method() → viewModel.method()
+    kotlin_action = re.sub(r'self\.(\w+)\(\)', r'viewModel.\1()', kotlin_action)
+
+    # isActive.toggle() → isActive = !isActive
+    kotlin_action = re.sub(r'(\w+)\.toggle\(\)', r'\1 = !\1', kotlin_action)
+
+    return kotlin_action
