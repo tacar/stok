@@ -253,6 +253,36 @@ def fix_invalid_elements(content: str) -> str:
     # 9. 不正なトップレベル宣言を修正
     content = re.sub(r'(}\s*)\n([^{\n]+)$', r'\1\n// \2', content)
 
+    # 10. 行末のカンマをセミコロンに置き換え
+    content = re.sub(r',(\s*)$', r';\1', content, flags=re.MULTILINE)
+
+    # 11. 不正な式の区切りを修正
+    content = re.sub(r'([^\s,;])\s+([^\s,;])', r'\1, \2', content)
+
+    # 12. 不正な閉じ括弧を修正
+    lines = content.split('\n')
+    fixed_lines = []
+
+    # 括弧のバランスを追跡
+    for line in lines:
+        # 括弧のカウント
+        open_paren = line.count('(')
+        close_paren = line.count(')')
+        open_brace = line.count('{')
+        close_brace = line.count('}')
+
+        # 括弧のバランスを修正
+        if open_paren > close_paren:
+            line += ')' * (open_paren - close_paren)
+
+        # 中括弧のバランスを修正
+        if open_brace > close_brace:
+            line += '}'
+
+        fixed_lines.append(line)
+
+    content = '\n'.join(fixed_lines)
+
     return content
 
 def find_kotlin_files(directory: str) -> List[str]:
@@ -274,109 +304,209 @@ def find_kotlin_files(directory: str) -> List[str]:
 
     return kotlin_files
 
-def fix_specific_files(error_files: Dict[str, List[str]], base_dir: str) -> None:
+def fix_specific_files(error_files: Dict[str, List[dict]], base_dir: str) -> None:
     """
-    特定のファイルを修正します。
+    特定のファイルのエラーを修正します。
 
     Args:
-        error_files: エラーが発生しているファイルとエラーメッセージのマップ
+        error_files: ファイルパスとエラー情報のマップ
         base_dir: ベースディレクトリ
     """
     for file_path, errors in error_files.items():
-        # ファイルパスを正規化
-        normalized_path = os.path.normpath(os.path.join(base_dir, file_path))
-
-        # ファイルが存在するか確認
-        if not os.path.exists(normalized_path):
-            print(f"警告: ファイルが存在しません: {normalized_path}")
+        # ファイルの内容を読み込む
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            print(f"エラー: ファイルの読み込みに失敗しました: {e}")
             continue
 
-        # ファイルを修正
-        fix_kotlin_file(normalized_path)
+        # 元のコンテンツを保存
+        original_content = content
 
-def parse_error_messages(error_messages: str) -> Dict[str, List[str]]:
+        # 行ごとに分割
+        lines = content.split('\n')
+
+        # エラーを行番号でソート（降順）
+        errors.sort(key=lambda x: x['line'], reverse=True)
+
+        # 各エラーを処理
+        for error in errors:
+            line_num = error['line'] - 1  # 0-indexedに変換
+            if line_num < 0 or line_num >= len(lines):
+                continue
+
+            line = lines[line_num]
+            error_msg = error['message']
+            col = error['column'] - 1  # 0-indexedに変換
+
+            # エラーの種類に応じて修正
+            if "Unexpected tokens" in error_msg:
+                # 不正なトークンを削除
+                if col < len(line):
+                    # セミコロンで区切る必要がある場合
+                    if "use ';' to separate expressions" in error_msg:
+                        # カンマをセミコロンに置き換え
+                        if col > 0 and line[col-1] == ',':
+                            lines[line_num] = line[:col-1] + ';' + line[col:]
+                        else:
+                            # 指定位置にセミコロンを挿入
+                            lines[line_num] = line[:col] + ';' + line[col:]
+                    else:
+                        # カンマや不正なトークンを削除
+                        if col > 0 and line[col-1] == ',':
+                            lines[line_num] = line[:col-1] + line[col:]
+                        else:
+                            # 行末までの不正なトークンを削除
+                            lines[line_num] = line[:col]
+
+            elif "Expecting an element" in error_msg:
+                # 要素が期待されている場合、行を削除または修正
+                if line.strip().endswith(','):
+                    # カンマで終わる行を修正
+                    lines[line_num] = line.rstrip(',')
+                elif col < len(line):
+                    # 指定位置に空の要素を挿入
+                    lines[line_num] = line[:col] + "/* empty element */" + line[col:]
+                else:
+                    # コメントアウト
+                    lines[line_num] = f"// {line} /* Expecting an element */"
+
+            elif "Expecting ')'" in error_msg:
+                # 閉じ括弧が期待されている場合、追加
+                if col < len(line):
+                    lines[line_num] = line[:col] + ')' + line[col:]
+                else:
+                    lines[line_num] = line + ')'
+
+            elif "Expecting '}'" in error_msg:
+                # 閉じ中括弧が期待されている場合、追加
+                # 次の行に追加
+                if line_num + 1 < len(lines):
+                    lines.insert(line_num + 1, '}')
+                else:
+                    lines.append('}')
+
+            elif "Expecting a top level declaration" in error_msg:
+                # トップレベル宣言が期待されている場合、コメントアウト
+                lines[line_num] = f"// {line} /* Invalid top level declaration */"
+
+        # 修正した内容を保存
+        content = '\n'.join(lines)
+
+        # 変更があった場合のみファイルを更新
+        if content != original_content:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"ファイルを修正しました: {file_path}")
+            except Exception as e:
+                print(f"エラー: ファイルの書き込みに失敗しました: {e}")
+        else:
+            print(f"変更なし: {file_path}")
+
+def parse_error_messages(error_messages: str) -> Dict[str, List[dict]]:
     """
-    エラーメッセージを解析します。
+    エラーメッセージを解析して、ファイルごとのエラー情報を抽出します。
 
     Args:
         error_messages: エラーメッセージ
 
     Returns:
-        ファイルパスとエラーメッセージのマップ
+        ファイルパスをキー、エラー情報のリストを値とする辞書
     """
     error_files = {}
 
-    # エラーメッセージを行ごとに処理
+    # エラーメッセージの各行を処理
     for line in error_messages.split('\n'):
-        # ファイルパスとエラーメッセージを抽出
-        match = re.search(r'file://([^:]+):(\d+):(\d+)\s+(.*)', line)
-        if match:
-            file_path = match.group(1)
-            line_num = match.group(2)
-            col_num = match.group(3)
-            error_msg = match.group(4)
+        if not line.strip():
+            continue
 
-            # ファイルパスを正規化
-            file_path = file_path.replace('/Users/admin/project/stok/tooo/', '')
+        # 'e: file://...' 形式のエラーメッセージを処理
+        if line.startswith('e:') and 'file://' in line:
+            # ファイルパスとエラー情報を抽出
+            match = re.search(r'e:\s+file://([^:]+):(\d+):(\d+)\s+(.*)', line)
+            if match:
+                file_path = match.group(1)
+                line_num = int(match.group(2))
+                col_num = int(match.group(3))
+                error_msg = match.group(4)
 
-            # エラーメッセージを追加
-            if file_path not in error_files:
-                error_files[file_path] = []
+                # エラー情報を保存
+                if file_path not in error_files:
+                    error_files[file_path] = []
 
-            error_files[file_path].append(f"Line {line_num}, Col {col_num}: {error_msg}")
+                error_files[file_path].append({
+                    'line': line_num,
+                    'column': col_num,
+                    'message': error_msg
+                })
 
     return error_files
 
 def main():
     """メイン関数"""
     if len(sys.argv) < 2:
-        print("使用方法: python kotlin_error_fixer.py <ディレクトリ> [--error-file <エラーファイル>]")
-        sys.exit(1)
+        print("使用方法: python kotlin_error_fixer.py <ディレクトリまたはエラーファイル>")
+        print("または: python kotlin_error_fixer.py --error \"エラーメッセージ\"")
+        return
 
-    directory = sys.argv[1]
+    arg = sys.argv[1]
 
-    if not os.path.exists(directory):
-        print(f"エラー: ディレクトリが存在しません: {directory}")
-        sys.exit(1)
+    # エラーメッセージが直接指定された場合
+    if arg == "--error" and len(sys.argv) > 2:
+        error_messages = sys.argv[2]
 
-    # エラーファイルが指定されている場合
-    error_file = None
-    if len(sys.argv) > 2 and sys.argv[2] == '--error-file' and len(sys.argv) > 3:
-        error_file = sys.argv[3]
+        # エラーメッセージを解析
+        error_files = parse_error_messages(error_messages)
 
-        if not os.path.exists(error_file):
-            print(f"エラー: エラーファイルが存在しません: {error_file}")
-            sys.exit(1)
+        # 特定のファイルを修正
+        fix_specific_files(error_files, "")
 
-        # エラーファイルを読み込み
-        with open(error_file, 'r', encoding='utf-8') as f:
+        print(f"処理完了: {len(error_files)}個のファイルを修正しました。")
+        return
+
+    # エラーメッセージファイルが指定された場合
+    if arg.endswith('.txt') and os.path.exists(arg):
+        with open(arg, 'r', encoding='utf-8') as f:
             error_messages = f.read()
 
         # エラーメッセージを解析
         error_files = parse_error_messages(error_messages)
 
         # 特定のファイルを修正
-        fix_specific_files(error_files, directory)
+        fix_specific_files(error_files, "")
 
         print(f"処理完了: {len(error_files)}個のファイルを修正しました。")
-        sys.exit(0)
+        return
 
-    # 全てのKotlinファイルを検索
-    kotlin_files = find_kotlin_files(directory)
+    # ディレクトリが指定された場合
+    if os.path.isdir(arg):
+        # Kotlinファイルを検索
+        kotlin_files = find_kotlin_files(arg)
 
-    if not kotlin_files:
-        print(f"警告: Kotlinファイルが見つかりませんでした: {directory}")
-        sys.exit(0)
+        print(f"{len(kotlin_files)}個のKotlinファイルを処理します...")
 
-    print(f"{len(kotlin_files)}個のKotlinファイルを処理します...")
+        # 各ファイルを修正
+        fixed_count = 0
+        for file_path in kotlin_files:
+            if fix_kotlin_file(file_path):
+                fixed_count += 1
 
-    fixed_count = 0
+        print(f"処理完了: {fixed_count}/{len(kotlin_files)}個のファイルを修正しました。")
+    else:
+        # 標準入力からエラーメッセージを読み込む
+        error_messages = arg
+        for line in sys.stdin:
+            error_messages += line
 
-    for file_path in kotlin_files:
-        if fix_kotlin_file(file_path):
-            fixed_count += 1
+        # エラーメッセージを解析
+        error_files = parse_error_messages(error_messages)
 
-    print(f"処理完了: {fixed_count}/{len(kotlin_files)}個のファイルを修正しました。")
+        # 特定のファイルを修正
+        fix_specific_files(error_files, "")
+
+        print(f"処理完了: {len(error_files)}個のファイルを修正しました。")
 
 if __name__ == "__main__":
     main()

@@ -72,6 +72,38 @@ DEFAULT_TEMPLATE_IOS_DIR = "../tmpios"
 DEFAULT_TEMPLATE_KOTLIN_DIR = "../tmpkotlin"
 DEFAULT_OUTPUT_DIR = "../to"
 
+SWIFT_TO_KOTLIN_TYPE_MAPPINGS = {
+    'String': 'String',
+    'Int': 'Int',
+    'Double': 'Double',
+    'Float': 'Float',
+    'Bool': 'Boolean',
+    '[String]': 'List<String>',
+    '[Int]': 'List<Int>',
+    'Date': 'LocalDateTime',
+    'UUID': 'String',
+    'Data': 'ByteArray',
+    'Optional<String>': 'String?',
+    'Optional<Int>': 'Int?',
+    'Optional<Bool>': 'Boolean?',
+    'Any': 'Any',
+    'AnyObject': 'Any',
+    'Void': 'Unit'
+}
+
+DEFAULT_IMPORTS = """
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.NavController
+import androidx.navigation.compose.rememberNavController
+import java.time.LocalDateTime
+""".strip()
+
 def parse_arguments():
     """コマンドライン引数をパースします"""
     parser = argparse.ArgumentParser(description='Swift から Kotlin への変換ツール')
@@ -309,6 +341,672 @@ def analyze_swift_project(from_dir: str) -> Dict[str, Any]:
 
     return project_info
 
+def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any], package_name: str):
+    """SwiftUIビューをJetpack Composeに変換します"""
+    print("ビューを変換しています...")
+
+    view_files = project_info.get('views', [])
+
+    for view_file in view_files:
+        try:
+            swift_path = os.path.join(from_dir, view_file)
+            if not os.path.exists(swift_path):
+                print(f"警告: ファイルが見つかりません: {swift_path}")
+                continue
+
+            # SwiftUIファイルを読み込む
+            with open(swift_path, 'r', encoding='utf-8') as f:
+                swift_content = f.read()
+
+            # ファイル名からKotlinファイル名を生成
+            kotlin_file_name = os.path.basename(view_file).replace('.swift', '.kt')
+            if '/Views/' in view_file:
+                relative_path = 'ui/components'
+            elif '/Screens/' in view_file or '/Features/' in view_file:
+                relative_path = 'ui/screens'
+            else:
+                relative_path = 'ui/components'
+
+            kotlin_dir = os.path.join(package_dir, relative_path)
+            os.makedirs(kotlin_dir, exist_ok=True)
+            kotlin_path = os.path.join(kotlin_dir, kotlin_file_name)
+
+            # パッケージ名を生成
+            package_path = f"{package_name}.{relative_path.replace('/', '.')}"
+
+            # SwiftUIコードをJetpack Composeに変換
+            kotlin_content = convert_swiftui_to_compose(swift_content, package_path)
+
+            # 変換されたコードを保存
+            with open(kotlin_path, 'w', encoding='utf-8') as f:
+                f.write(kotlin_content)
+
+            print(f"変換完了: {view_file} -> {kotlin_path}")
+        except Exception as e:
+            print(f"警告: {view_file}の変換中にエラーが発生しました: {e}")
+            import traceback
+            traceback.print_exc()
+
+def convert_swiftui_to_compose(swift_content: str, package_name: str) -> str:
+    """SwiftUIコードをJetpack Composeコードに変換します"""
+    try:
+        # コメントを削除
+        swift_content = remove_comments(swift_content)
+
+        # パッケージ宣言とインポート文を生成
+        kotlin_content = f"""package {package_name}
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.NavController
+import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+"""
+        # struct定義を検出
+        struct_matches = re.finditer(r'struct\s+(\w+)(?::\s*View)?\s*{([^}]+)}', swift_content)
+
+        for struct_match in struct_matches:
+            struct_name = struct_match.group(1)
+            struct_body = struct_match.group(2)
+
+            # プロパティを抽出
+            properties = extract_properties(struct_body)
+
+            # State宣言を生成
+            state_declarations = convert_properties_to_state(properties)
+
+            # body部分を抽出して変換
+            body_content = extract_and_convert_body(struct_body)
+
+            # Composable関数を生成
+            kotlin_content += f"""
+@Composable
+fun {struct_name}(
+    modifier: Modifier = Modifier,
+    navController: NavController = rememberNavController()
+) {{
+    {state_declarations}
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {{
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {{
+            {body_content}
+        }}
+    }}
+}}
+
+@Preview(showBackground = true)
+@Composable
+private fun {struct_name}Preview() {{
+    {struct_name}()
+}}
+"""
+
+        return kotlin_content.strip()
+    except Exception as e:
+        print(f"警告: SwiftUIコードの変換中にエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
+        return ""
+
+def extract_properties(content: str) -> List[Dict[str, str]]:
+    """プロパティを抽出します"""
+    properties = []
+
+    # @State, @Binding, @Published などのプロパティを検出
+    property_patterns = [
+        (r'@State\s+(?:private\s+)?var\s+(\w+)\s*:\s*([^=\n]+)(?:\s*=\s*([^\n]+))?', 'State'),
+        (r'@Binding\s+var\s+(\w+)\s*:\s*([^=\n]+)(?:\s*=\s*([^\n]+))?', 'Binding'),
+        (r'@Published\s+var\s+(\w+)\s*:\s*([^=\n]+)(?:\s*=\s*([^\n]+))?', 'Published'),
+    ]
+
+    for pattern, prop_type in property_patterns:
+        matches = re.finditer(pattern, content)
+        for match in matches:
+            properties.append({
+                'name': match.group(1),
+                'type': match.group(2),
+                'default': match.group(3) if match.group(3) else None,
+                'property_type': prop_type
+            })
+
+    return properties
+
+def convert_properties_to_state(properties: List[Dict[str, str]]) -> str:
+    """プロパティをComposeのStateに変換します"""
+    state_declarations = []
+
+    for prop in properties:
+        kotlin_type = convert_type(prop['type'])
+        default_value = prop['default'] if prop['default'] else get_default_value(kotlin_type)
+
+        if prop['property_type'] == 'State':
+            state_declarations.append(
+                f"var {prop['name']} by remember {{ mutableStateOf<{kotlin_type}>({default_value}) }}"
+            )
+        elif prop['property_type'] == 'Binding':
+            state_declarations.append(
+                f"var {prop['name']}: MutableState<{kotlin_type}> = remember {{ mutableStateOf({default_value}) }}"
+            )
+
+    return "\n    ".join(state_declarations)
+
+def get_default_value(kotlin_type: str) -> str:
+    """型のデフォルト値を返します"""
+    defaults = {
+        'String': '""',
+        'Int': '0',
+        'Long': '0L',
+        'Float': '0f',
+        'Double': '0.0',
+        'Boolean': 'false',
+        'List<*>': 'emptyList()',
+        'Set<*>': 'emptySet()',
+        'Map<*,*>': 'emptyMap()',
+    }
+
+    for type_pattern, default in defaults.items():
+        if '*' in type_pattern:
+            pattern = type_pattern.replace('*', r'[^>]+')
+            if re.match(pattern, kotlin_type):
+                return default
+        elif kotlin_type == type_pattern:
+            return default
+
+    return "null"
+
+def extract_and_convert_body(body_content: str) -> str:
+    """body部分を抽出して変換します"""
+    # var body: some View { ... } を検出
+    body_match = re.search(r'var\s+body\s*:\s*some\s+View\s*{([^}]+)}', body_content)
+    if body_match:
+        body_content = body_match.group(1)
+
+    # レイアウト構造を変換
+    body_content = convert_layout_structure(body_content)
+
+    # モディファイアを変換
+    body_content = convert_modifiers(body_content)
+
+    # 条件付きビューを変換
+    body_content = convert_conditional_views(body_content)
+
+    return body_content.strip()
+
+def convert_layout_structure(content: str) -> str:
+    """レイアウト構造を変換します"""
+    try:
+        # 基本的なレイアウトの変換
+        layout_patterns = {
+            r'VStack\s*(?:\([^)]*\))?\s*{([^}]+)}': 'Column',
+            r'HStack\s*(?:\([^)]*\))?\s*{([^}]+)}': 'Row',
+            r'ZStack\s*(?:\([^)]*\))?\s*{([^}]+)}': 'Box',
+            r'ScrollView\s*(?:\([^)]*\))?\s*{([^}]+)}': 'LazyColumn',
+            r'List\s*{([^}]+)}': 'LazyColumn',
+        }
+
+        for pattern, compose_widget in layout_patterns.items():
+            content = re.sub(
+                pattern,
+                lambda m: f'{compose_widget}(modifier = Modifier.fillMaxWidth()) {{\n{convert_layout_content(m.group(1))}\n}}',
+                content
+            )
+
+        # ForEachの変換
+        content = re.sub(
+            r'ForEach\s*\(([^)]+)\)\s*{([^}]+)}',
+            lambda m: convert_foreach(m.group(1), m.group(2)),
+            content
+        )
+
+        return content
+    except Exception as e:
+        print(f"警告: レイアウト構造の変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_layout_content(content: str) -> str:
+    """レイアウトの内容を変換します"""
+    try:
+        # 各行を処理
+        lines = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if line:
+                # コンポーネントを変換
+                line = convert_components(line)
+                lines.append(line)
+
+        return '\n'.join(lines)
+    except Exception as e:
+        print(f"警告: レイアウトコンテンツの変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_foreach(items: str, content: str) -> str:
+    """ForEachを変換します"""
+    try:
+        # パラメータを解析
+        params_match = re.search(r'([^,]+)(?:,\s*id:\s*\\\.(\w+))?', items)
+        if not params_match:
+            return f'// TODO: Convert ForEach: {items}'
+
+        collection = params_match.group(1).strip()
+        id_param = params_match.group(2)
+
+        # items関数に変換
+        if id_param:
+            return f'''items({collection}, key = {{ it.{id_param} }}) {{ item ->
+    {convert_layout_content(content)}
+}}'''
+        else:
+            return f'''items({collection}) {{ item ->
+    {convert_layout_content(content)}
+}}'''
+    except Exception as e:
+        print(f"警告: ForEachの変換中にエラーが発生しました: {e}")
+        return f'// TODO: Convert ForEach: {items}'
+
+def generate_compose_imports(package_name: str) -> str:
+    """必要なインポート文を生成します"""
+    return f"""package {package_name}.ui.screens
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.Color
+import coil.compose.rememberAsyncImagePainter
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
+import androidx.navigation.compose.rememberNavController
+"""
+
+def remove_comments(content: str) -> str:
+    """コメントを削除します"""
+    import re
+    # 単一行コメントを削除
+    content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
+    # 複数行コメントを削除
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+def convert_components(content: str) -> str:
+    """SwiftUIコンポーネントをJetpack Composeコンポーネントに変換します"""
+    try:
+        # パッケージ宣言とインポートを追加
+        if not content.startswith("package"):
+            content = add_package_declaration(content)
+
+        # 基本的なコンポーネントの変換
+        content = convert_basic_components(content)
+
+        # 特殊なコンポーネントの変換
+        content = convert_special_components(content)
+
+        # イベントハンドラの変換
+        content = convert_event_handlers(content)
+
+        # トップレベル関数の変換
+        content = convert_top_level_functions(content)
+
+        return content.strip()
+    except Exception as e:
+        print(f"警告: コンポーネントの変換中にエラーが発生しました: {e}")
+        return content
+
+def add_package_declaration(content: str) -> str:
+    """パッケージ宣言とインポートを追加します"""
+    package_decl = """package com.example.app.ui.components
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
+import androidx.navigation.compose.rememberNavController
+"""
+    return package_decl + "\n" + content
+
+def convert_top_level_functions(content: str) -> str:
+    """トップレベル関数を変換します"""
+    try:
+        # struct定義をComposable関数に変換
+        content = re.sub(
+            r'struct\s+(\w+)(?::\s*View)?\s*{([^}]+)}',
+            lambda m: convert_struct_to_composable(m.group(1), m.group(2)),
+            content
+        )
+
+        # プロパティをStateに変換
+        content = re.sub(
+            r'@State\s+(?:private\s+)?var\s+(\w+)\s*:\s*([^=\n]+)(?:\s*=\s*([^\n]+))?',
+            lambda m: convert_state_property(m.group(1), m.group(2), m.group(3)),
+            content
+        )
+
+        return content
+    except Exception as e:
+        print(f"警告: トップレベル関数の変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_struct_to_composable(name: str, body: str) -> str:
+    """struct定義をComposable関数に変換します"""
+    try:
+        # body部分を解析して必要な変数を抽出
+        state_vars = extract_state_variables(body)
+        view_content = extract_view_content(body)
+
+        return f"""
+@Composable
+fun {name}(
+    modifier: Modifier = Modifier,
+    navController: NavController = rememberNavController()
+) {{
+    {state_vars}
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {{
+        {view_content}
+    }}
+}}
+
+@Preview(showBackground = true)
+@Composable
+private fun {name}Preview() {{
+    {name}()
+}}
+"""
+    except Exception as e:
+        print(f"警告: struct定義の変換中にエラーが発生しました: {e}")
+        return f"// TODO: Convert struct {name}"
+
+def extract_state_variables(body: str) -> str:
+    """State変数を抽出します"""
+    state_vars = []
+    state_pattern = r'@State\s+(?:private\s+)?var\s+(\w+)\s*:\s*([^=\n]+)(?:\s*=\s*([^\n]+))?'
+
+    for match in re.finditer(state_pattern, body):
+        name = match.group(1)
+        type_name = convert_type(match.group(2))
+        default_value = match.group(3) if match.group(3) else get_default_value(type_name)
+
+        state_vars.append(
+            f"var {name} by remember {{ mutableStateOf<{type_name}>({default_value}) }}"
+        )
+
+    return "\n    ".join(state_vars)
+
+def extract_view_content(body: str) -> str:
+    """View部分を抽出して変換します"""
+    try:
+        # var body: some View { ... } を検出
+        body_match = re.search(r'var\s+body\s*:\s*some\s+View\s*{([^}]+)}', body)
+        if body_match:
+            content = body_match.group(1)
+
+            # レイアウト構造を変換
+            content = convert_layout_structure(content)
+
+            # モディファイアを変換
+            content = convert_modifiers(content)
+
+            return content.strip()
+        return ""
+    except Exception as e:
+        print(f"警告: View部分の抽出中にエラーが発生しました: {e}")
+        return ""
+
+def convert_state_property(name: str, type_name: str, default_value: str = None) -> str:
+    """State プロパティを変換します"""
+    kotlin_type = convert_type(type_name)
+    default = default_value if default_value else get_default_value(kotlin_type)
+    return f"var {name} by remember {{ mutableStateOf<{kotlin_type}>({default}) }}"
+
+def convert_basic_components(content: str) -> str:
+    """基本的なコンポーネントを変換します"""
+    try:
+        # Text
+        content = re.sub(
+            r'Text\s*\("([^"]+)"\)',
+            lambda m: f'Text(text = "{m.group(1)}")',
+            content
+        )
+
+        # Button
+        content = re.sub(
+            r'Button\s*\(action:\s*{\s*([^}]+)\s*}\)\s*{\s*([^}]+)\s*}',
+            lambda m: f'''Button(
+                onClick = {{ {m.group(1).strip()} }},
+                modifier = Modifier.fillMaxWidth()
+            ) {{
+                {convert_components(m.group(2))}
+            }}''',
+            content
+        )
+
+        # TextField
+        content = re.sub(
+            r'TextField\s*\("([^"]+)",\s*text:\s*\$(\w+)\)',
+            lambda m: f'''OutlinedTextField(
+                value = {m.group(2)},
+                onValueChange = {{ {m.group(2)} = it }},
+                label = {{ Text(text = "{m.group(1)}") }},
+                modifier = Modifier.fillMaxWidth()
+            )''',
+            content
+        )
+
+        # Image
+        content = re.sub(
+            r'Image\s*\("([^"]+)"\)',
+            lambda m: f'Image(painter = painterResource(id = R.drawable.{m.group(1).lower()}), contentDescription = null)',
+            content
+        )
+
+        return content
+    except Exception as e:
+        print(f"警告: 基本コンポーネントの変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_special_components(content: str) -> str:
+    """特殊なコンポーネントを変換します"""
+    try:
+        # NavigationLink
+        content = re.sub(
+            r'NavigationLink\s*\(destination:\s*([^)]+)\)\s*{\s*([^}]+)\s*}',
+            lambda m: convert_navigation_link(m.group(1), m.group(2)),
+            content
+        )
+
+        # Alert
+        content = re.sub(
+            r'\.alert\s*\(isPresented:\s*\$([^)]+)\)\s*{\s*([^}]+)\s*}',
+            lambda m: convert_alert(m.group(1), m.group(2)),
+            content
+        )
+
+        # Sheet
+        content = re.sub(
+            r'\.sheet\s*\(isPresented:\s*\$([^)]+)\)\s*{\s*([^}]+)\s*}',
+            lambda m: convert_sheet(m.group(1), m.group(2)),
+            content
+        )
+
+        return content
+    except Exception as e:
+        print(f"警告: 特殊コンポーネントの変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_navigation_link(destination: str, content: str) -> str:
+    """NavigationLinkを変換します"""
+    try:
+        route = convert_destination(destination)
+        return f'''TextButton(
+            onClick = {{ navController.navigate("{route}") }},
+            modifier = Modifier.fillMaxWidth()
+        ) {{
+            {convert_layout_content(content)}
+        }}'''
+    except Exception as e:
+        print(f"警告: NavigationLinkの変換中にエラーが発生しました: {e}")
+        return f'// TODO: Convert NavigationLink: {destination}'
+
+def convert_alert(binding: str, content: str) -> str:
+    """アラートを変換します"""
+    try:
+        title = re.search(r'Text\s*\("([^"]+)"\)', content)
+        message = re.search(r'message:\s*"([^"]+)"', content)
+
+        return f'''if ({binding}) {{
+            AlertDialog(
+                onDismissRequest = {{ {binding} = false }},
+                title = {{ Text(text = "{title.group(1) if title else 'Alert'}") }},
+                text = {{ Text(text = "{message.group(1) if message else ''}") }},
+                confirmButton = {{
+                    TextButton(onClick = {{ {binding} = false }}) {{
+                        Text(text = "OK")
+                    }}
+                }}
+            )
+        }}'''
+    except Exception as e:
+        print(f"警告: Alertの変換中にエラーが発生しました: {e}")
+        return f'// TODO: Convert Alert: {binding}'
+
+def convert_sheet(binding: str, content: str) -> str:
+    """シートを変換します"""
+    try:
+        return f'''if ({binding}) {{
+            ModalBottomSheet(
+                onDismissRequest = {{ {binding} = false }},
+                sheetState = rememberModalBottomSheetState()
+            ) {{
+                {convert_layout_content(content)}
+            }}
+        }}'''
+    except Exception as e:
+        print(f"警告: Sheetの変換中にエラーが発生しました: {e}")
+        return f'// TODO: Convert Sheet: {binding}'
+
+def convert_event_handlers(content: str) -> str:
+    """イベントハンドラを変換します"""
+    try:
+        # onTapGesture
+        content = re.sub(
+            r'\.onTapGesture\s*{\s*([^}]+)\s*}',
+            lambda m: f'.clickable {{ {m.group(1).strip()} }}',
+            content
+        )
+
+        # onAppear
+        content = re.sub(
+            r'\.onAppear\s*{\s*([^}]+)\s*}',
+            lambda m: f'''LaunchedEffect(Unit) {{
+                {m.group(1).strip()}
+            }}''',
+            content
+        )
+
+        # onChange
+        content = re.sub(
+            r'\.onChange\s*\(of:\s*([^)]+)\)\s*{\s*([^}]+)\s*}',
+            lambda m: f'''LaunchedEffect({m.group(1)}) {{
+                {m.group(2).strip()}
+            }}''',
+            content
+        )
+
+        return content
+    except Exception as e:
+        print(f"警告: イベントハンドラの変換中にエラーが発生しました: {e}")
+        return content
+
+def convert_system_icon(icon_name: str) -> str:
+    """システムアイコンを変換します"""
+    icon_mapping = {
+        'house': 'Home',
+        'gear': 'Settings',
+        'person': 'Person',
+        'bell': 'Notifications',
+        'star': 'Star',
+        'heart': 'Favorite',
+        'magnifyingglass': 'Search',
+        'plus': 'Add',
+        'minus': 'Remove',
+        'checkmark': 'Check',
+        'xmark': 'Close',
+        'trash': 'Delete',
+        'folder': 'Folder',
+        'doc': 'Description',
+        'pencil': 'Edit',
+        'arrow.left': 'ArrowBack',
+        'arrow.right': 'ArrowForward',
+        'arrow.up': 'ArrowUpward',
+        'arrow.down': 'ArrowDownward',
+        'calendar': 'DateRange',
+        'clock': 'Schedule',
+        'location': 'LocationOn',
+        'camera': 'Camera',
+        'photo': 'Photo',
+        'mic': 'Mic',
+        'video': 'Videocam',
+        'speaker': 'VolumeUp',
+        'message': 'Message',
+        'mail': 'Email',
+        'phone': 'Phone',
+        'wifi': 'Wifi',
+        'bluetooth': 'Bluetooth',
+        'battery': 'BatteryFull',
+        'airplane': 'AirplanemodeActive',
+        'cart': 'ShoppingCart',
+        'tag': 'LocalOffer',
+        'flag': 'Flag',
+        'bookmark': 'Bookmark',
+        'link': 'Link',
+        'cloud': 'Cloud',
+        'download': 'Download',
+        'upload': 'Upload',
+        'refresh': 'Refresh',
+        'share': 'Share',
+        'info': 'Info',
+        'warning': 'Warning',
+        'error': 'Error',
+        'question': 'Help',
+        'lock': 'Lock',
+        'unlock': 'LockOpen',
+        'key': 'VpnKey',
+        'shield': 'Security',
+    }
+
+    return icon_mapping.get(icon_name, 'Default')
+
 def main():
     """メイン関数"""
     try:
@@ -458,4 +1156,5 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    main()
     main()
