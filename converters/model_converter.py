@@ -252,7 +252,32 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
 
             # プロパティ行を追加
             comma = "," if i < len(model_info['properties']) - 1 else ""
-            lines.append(f"    {val_or_var} {prop_name}: {kotlin_type}{default_value}{comma}")
+
+            # コメントを含む行を処理
+            property_line = f"    {val_or_var} {prop_name}: {kotlin_type}{default_value}{comma}"
+
+            # コメントの処理
+            if "//" in property_line:
+                # コメント部分を抽出
+                comment_parts = property_line.split("//")
+                code_part = comment_parts[0].rstrip()
+                comment_part = "// " + comment_parts[1].strip()
+
+                # コメント内の余分なカンマを削除
+                comment_part = re.sub(r',+', ',', comment_part)
+
+                # コード部分からカンマを削除
+                if code_part.endswith(","):
+                    code_part = code_part[:-1]
+
+                # 最後のプロパティでなければカンマを追加
+                if i < len(model_info['properties']) - 1:
+                    code_part = code_part + ","
+
+                # 行を再構成
+                property_line = code_part + " " + comment_part
+
+            lines.append(property_line)
 
         lines.append(")")
 

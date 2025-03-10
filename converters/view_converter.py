@@ -168,7 +168,11 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
         "import androidx.compose.material.icons.filled.*",
         "import androidx.compose.foundation.lazy.LazyColumn",
         "import androidx.compose.foundation.lazy.items",
+        "import androidx.compose.ui.text.font.FontWeight",
+        "import androidx.compose.ui.text.font.FontStyle",
+        "import androidx.compose.foundation.shape.RoundedCornerShape",
         "import androidx.lifecycle.viewmodel.compose.viewModel",
+        "import androidx.compose.foundation.layout.PaddingValues",
         f"import {package_name}.viewmodels.*",
         f"import {package_name}.models.*",
         f"import {package_name}.ui.theme.*"
@@ -283,19 +287,57 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
 
     # 生成されたコードを検証して閉じ括弧のバランスを確認
     code = "\n".join(lines)
-    open_braces = code.count('{')
-    close_braces = code.count('}')
+
+    # 括弧のバランスを最終確認
+    code_lines = code.split('\n')
+    final_code = []
+    open_count = 0
+    open_brackets = []
+
+    for line in code_lines:
+        # 行内の括弧の数をカウント
+        for char in line:
+            if char == '{':
+                open_count += 1
+                open_brackets.append('{')
+            elif char == '}':
+                if open_count > 0:
+                    open_count -= 1
+                    if open_brackets and open_brackets[-1] == '{':
+                        open_brackets.pop()
+            elif char == '(':
+                open_brackets.append('(')
+            elif char == ')':
+                if open_brackets and open_brackets[-1] == '(':
+                    open_brackets.pop()
+
+        final_code.append(line)
 
     # 閉じ括弧が足りない場合は追加
-    if open_braces > close_braces:
-        for _ in range(open_braces - close_braces):
-            lines.append("}")
+    if open_count > 0:
+        for _ in range(open_count):
+            final_code.append('}')
 
-    # 余分な閉じ括弧を削除
-    code = "\n".join(lines)
-    code = re.sub(r'\}\s*\}\s*\}', '}\n}', code)
+    # 最終的な結果を生成
+    final_text = '\n'.join(final_code)
 
-    return code
+    # 最終的なクリーンアップ
+    # 1. 余分な空行を削除
+    final_text = re.sub(r'\n\s*\n\s*\n', '\n\n', final_text)
+
+    # 2. 余分な閉じ括弧を削除
+    final_text = re.sub(r'\}\s*\}\s*\}', '}\n}', final_text)
+
+    # 3. 行末のカンマを修正
+    final_text = re.sub(r',\s*\)', ')', final_text)
+
+    # 4. 行末のセミコロンを削除
+    final_text = re.sub(r';\s*$', '', final_text)
+
+    # 5. 不正な構文を修正
+    final_text = re.sub(r'(\w+)\s*=\s*([^,\n]+),\s*\)', r'\1 = \2)', final_text)
+
+    return final_text
 
 def convert_swiftui_to_compose(swift_code: str) -> str:
     """
@@ -316,7 +358,7 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
     swift_code = re.sub(r'\.environment\([^)]*\)', '', swift_code)
 
     # 3. SwiftUIの特殊構文を置換
-    swift_code = re.sub(r'TabView\s*\{', 'Scaffold(\n    bottomBar = {\n        BottomNavigation {\n', swift_code)
+    swift_code = re.sub(r'TabView\s*\{', '// TabView START\n', swift_code)
     swift_code = re.sub(r'\.tabItem\s*\{', '// Tab Item\n', swift_code)
 
     # 4. systemImageをIconに変換
@@ -337,6 +379,12 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
 
     # 8. 引数ラベルを削除
     swift_code = re.sub(r'(\w+):\s*', '', swift_code)
+
+    # 9. 余分なカンマを削除
+    swift_code = re.sub(r',\s*,', ',', swift_code)
+
+    # 10. 余分な括弧を削除
+    swift_code = re.sub(r'\(\s*\)', '()', swift_code)
 
     compose_code = []
 
@@ -362,9 +410,9 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
         r'ZStack(\([^)]*\))?\s*{': 'Box(modifier = Modifier.fillMaxWidth()) {',
 
         # TabView関連
-        r'TabView\s*{': 'Scaffold(\n    bottomBar = {\n        BottomNavigation {\n',
-        r'\.tabItem\s*{': '// Tab Item\n',
-        r'Label\(\s*"([^"]+)",\s*systemImage:\s*"([^"]+)"\s*\)': lambda m: f'BottomNavigationItem(\n    icon = {{ Icon(Icons.Default.{map_system_icon(m.group(2))}, contentDescription = null) }},\n    label = {{ Text("{m.group(1)}") }},\n    selected = false,\n    onClick = {{ /* TODO */ }}\n)',
+        r'// TabView START': 'Scaffold(\n    bottomBar = {\n        BottomNavigation {',
+        r'// Tab Item': '            BottomNavigationItem(\n                icon = { Icon(Icons.Default.Home, contentDescription = null) },\n                label = { Text(\"Home\") },\n                selected = false,\n                onClick = { /* TODO */ }\n            )',
+        r'Label\(\s*"([^"]+)",\s*imageVector = Icons.Default.([^)]+)\)': lambda m: f'BottomNavigationItem(\n    icon = {{ Icon(Icons.Default.{m.group(2)}, contentDescription = null) }},\n    label = {{ Text("{m.group(1)}") }},\n    selected = false,\n    onClick = {{ /* TODO */ }}\n)',
 
         # スペーサー
         r'Spacer\(\)': 'Spacer(modifier = Modifier.weight(1f))',
@@ -440,6 +488,8 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
 
     # 行ごとに処理
     lines = swift_code.split('\n')
+    tab_view_mode = False
+
     for line in lines:
         # インデントを保持
         indent = len(line) - len(line.lstrip())
@@ -453,8 +503,23 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
 
         # コメント行はそのまま追加
         if line.startswith('//'):
-            compose_code.append(indent_str + line)
-            continue
+            if "TabView START" in line:
+                tab_view_mode = True
+                compose_code.append(indent_str + "Scaffold(")
+                compose_code.append(indent_str + "    bottomBar = {")
+                compose_code.append(indent_str + "        BottomNavigation {")
+                continue
+            elif "Tab Item" in line and tab_view_mode:
+                compose_code.append(indent_str + "            BottomNavigationItem(")
+                compose_code.append(indent_str + "                icon = { Icon(Icons.Default.Home, contentDescription = null) },")
+                compose_code.append(indent_str + "                label = { Text(\"Home\") },")
+                compose_code.append(indent_str + "                selected = false,")
+                compose_code.append(indent_str + "                onClick = { /* TODO */ }")
+                compose_code.append(indent_str + "            )")
+                continue
+            else:
+                compose_code.append(indent_str + line)
+                continue
 
         # 各マッピングを適用
         original_line = line
@@ -470,29 +535,88 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
 
         compose_code.append(indent_str + line)
 
+    # TabViewの閉じ括弧を追加
+    if tab_view_mode:
+        compose_code.append("        }")
+        compose_code.append("    }")
+        compose_code.append(")")
+
     # 閉じ括弧のバランスを確認して修正
     result = '\n'.join(compose_code)
 
     # 余分な閉じ括弧を削除
-    result = re.sub(r'\}\s*\}\s*\}', '}', result)
+    result = re.sub(r'\}\s*\}\s*\}', '}\n}', result)
 
     # 不適切な構造を修正
     result = re.sub(r'// TODO: Convert SwiftUI: Scaffold\(\s*// TODO: Convert SwiftUI: bottomBar = \{\s*// TODO: Convert SwiftUI: BottomNavigation \{',
                     'Scaffold(\n    bottomBar = {\n        BottomNavigation {', result)
 
-    # 閉じ括弧のバランスを再確認
-    open_braces = result.count('{')
-    close_braces = result.count('}')
+    # TabViewの構造を修正
+    result = re.sub(r'Scaffold\(\s*bottomBar = \{\s*BottomNavigation \{([^}]*)\}\s*\}',
+                   r'Scaffold(\n    bottomBar = {\n        BottomNavigation {\1        }\n    }', result)
+
+    # 特定のパターンを修正
+    # 1. Scaffoldの構造を修正
+    result = re.sub(r'Scaffold\(\s*bottomBar = \{\s*BottomNavigation \{([^}]*?)\s*\}\s*\}',
+                   r'Scaffold(\n    bottomBar = {\n        BottomNavigation {\1        }\n    }\n)', result)
+
+    # 2. カンマの問題を修正
+    result = re.sub(r'(\w+)\s*=\s*([^,\n]+)(?=\s*\n\s*\w+\s*=)', r'\1 = \2,', result)
+
+    # 3. 括弧のバランスを最終確認
+    result_lines = result.split('\n')
+    final_result = []
+    open_count = 0
+    open_brackets = []
+
+    for line in result_lines:
+        # 行内の括弧の数をカウント
+        for char in line:
+            if char == '{':
+                open_count += 1
+                open_brackets.append('{')
+            elif char == '}':
+                if open_count > 0:
+                    open_count -= 1
+                    if open_brackets and open_brackets[-1] == '{':
+                        open_brackets.pop()
+            elif char == '(':
+                open_brackets.append('(')
+            elif char == ')':
+                if open_brackets and open_brackets[-1] == '(':
+                    open_brackets.pop()
+
+        # 行を追加
+        final_result.append(line)
 
     # 閉じ括弧が足りない場合は追加
-    if open_braces > close_braces:
-        for _ in range(open_braces - close_braces):
-            result += '\n}'
+    if open_count > 0:
+        for _ in range(open_count):
+            final_result.append('}')
 
-    # 余分な閉じ括弧を削除
-    result = re.sub(r'\}\s*\}\s*\}', '}\n}', result)
+    # 最終的な結果を生成
+    final_text = '\n'.join(final_result)
 
-    return result
+    # 最終的なクリーンアップ
+    # 1. 余分な空行を削除
+    final_text = re.sub(r'\n\s*\n\s*\n', '\n\n', final_text)
+
+    # 2. 余分な閉じ括弧を削除
+    final_text = re.sub(r'\}\s*\}\s*\}', '}\n}', final_text)
+
+    # 3. 不完全なコードブロックを修正
+    final_text = re.sub(r'// TODO: Convert SwiftUI: ([^{]+)\s*\{([^}]*?)$', r'// TODO: Convert SwiftUI: \1 {\2\n}', final_text)
+
+    # 4. 行末のカンマを修正
+    final_text = re.sub(r',\s*\)', ')', final_text)
+
+    # 5. 行末のセミコロンを削除
+    final_text = re.sub(r';\s*$', '', final_text)
+
+    # 6. 不正な構文を修正
+    final_text = re.sub(r'(\w+)\s*=\s*([^,\n]+),\s*\)', r'\1 = \2)', final_text)
+
+    return final_text
 
 def convert_condition(swift_condition: str) -> str:
     """SwiftUIの条件式をKotlinの条件式に変換します"""
@@ -591,6 +715,10 @@ def map_edge_insets(edge1: str, edge2: str, value: str) -> str:
             padding_parts.append(f'start = {value}.dp')
         if 'trailing' in edges or 'right' in edges:
             padding_parts.append(f'end = {value}.dp')
+
+        # 少なくとも1つのパディングがない場合は、デフォルト値を追加
+        if not padding_parts:
+            padding_parts.append(f'all = {value}.dp')
 
         return ', '.join(padding_parts)
 
