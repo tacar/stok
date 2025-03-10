@@ -363,9 +363,6 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
     """SwiftUIビューをJetpack Composeに変換します"""
     print("ビューを変換しています...")
 
-    # R クラスのインポートを追加
-    r_import = f"import {package_name}.R\n"
-
     for view_file in project_info.get('views', []):
         try:
             swift_path = os.path.join(from_dir, view_file)
@@ -390,12 +387,26 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
             os.makedirs(kotlin_dir, exist_ok=True)
             kotlin_path = os.path.join(kotlin_dir, kotlin_file_name)
 
-            # パッケージ名を生成 - 固定値ではなく引数から取得
+            # パッケージ名を生成
             package_path = f"{package_name}.{relative_path.replace('/', '.')}"
 
-            # R クラスのインポートを追加
-            kotlin_content = r_import + convert_swiftui_to_compose(swift_content, package_path)
+            # パッケージ宣言とインポート文を生成
+            kotlin_content = f"""package {package_path}
 
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.NavController
+import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.viewmodel.compose.viewModel
+import {package_name}.R
+
+{convert_swiftui_to_compose(swift_content, package_path)}
+"""
             # 変換されたコードを保存
             with open(kotlin_path, 'w', encoding='utf-8') as f:
                 f.write(kotlin_content)
@@ -412,24 +423,9 @@ def convert_swiftui_to_compose(swift_content: str, package_name: str) -> str:
         # コメントを削除
         swift_content = remove_comments(swift_content)
 
-        # パッケージ宣言とインポート文を生成 - 常に com.example.app を使用
-        kotlin_content = f"""package {package_name}
-
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.navigation.NavController
-import androidx.navigation.compose.rememberNavController
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.app.R
-
-"""
         # struct定義を検出
         struct_matches = re.finditer(r'struct\s+(\w+)(?::\s*View)?\s*{([^}]+)}', swift_content)
+        kotlin_content = []
 
         for struct_match in struct_matches:
             struct_name = struct_match.group(1)
@@ -445,7 +441,7 @@ import com.example.app.R
             body_content = extract_and_convert_body(struct_body)
 
             # Composable関数を生成
-            kotlin_content += f"""
+            kotlin_content.append(f"""
 @Composable
 fun {struct_name}(
     modifier: Modifier = Modifier,
@@ -466,9 +462,9 @@ fun {struct_name}(
 private fun {struct_name}Preview() {{
     {struct_name}()
 }}
-"""
+""")
 
-        return kotlin_content.strip()
+        return "\n".join(kotlin_content).strip()
     except Exception as e:
         print(f"警告: SwiftUIコードの変換中にエラーが発生しました: {e}")
         import traceback
@@ -1149,6 +1145,108 @@ def setup_database(output_dir: str, package_dir: str, project_info: Dict[str, An
         import traceback
         traceback.print_exc()
 
+def setup_gradle(args, project_info):
+    """Gradleファイルをセットアップします"""
+    print("Gradleファイルをセットアップしています...")
+
+    build_gradle_path = os.path.join(args.output_dir, 'app/build.gradle')
+
+    dependencies = """
+    dependencies {
+        // Ktor関連
+        implementation "io.ktor:ktor-client-android:2.3.7"
+        implementation "io.ktor:ktor-client-core:2.3.7"
+        implementation "io.ktor:ktor-client-json:2.3.7"
+        implementation "io.ktor:ktor-client-logging:2.3.7"
+        implementation "io.ktor:ktor-client-serialization:2.3.7"
+        implementation "io.ktor:ktor-serialization-kotlinx-json:2.3.7"
+
+        // SQLDelight関連
+        implementation "com.squareup.sqldelight:android-driver:1.5.5"
+        implementation "com.squareup.sqldelight:coroutines-extensions:1.5.5"
+
+        // シリアライゼーション
+        implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0"
+
+        // Firebase関連
+        implementation platform('com.google.firebase:firebase-bom:32.7.0')
+        implementation 'com.google.firebase:firebase-analytics'
+        implementation 'com.google.firebase:firebase-auth'
+        implementation 'com.google.firebase:firebase-messaging'
+
+        // AdMob
+        implementation 'com.google.android.gms:play-services-ads:22.6.0'
+    }
+    """
+
+    try:
+        with open(build_gradle_path, 'r') as f:
+            content = f.read()
+
+        # 既存の dependencies ブロックを探して置換
+        if 'dependencies {' in content:
+            content = re.sub(
+                r'dependencies\s*{[^}]*}',
+                dependencies.strip(),
+                content
+            )
+        else:
+            content += "\n" + dependencies
+
+        with open(build_gradle_path, 'w') as f:
+            f.write(content)
+
+        print("Gradleの依存関係を更新しました")
+    except Exception as e:
+        print(f"警告: Gradleファイルの更新中にエラーが発生しました: {e}")
+
+def setup_resources(args):
+    """リソースファイルをセットアップします"""
+    print("リソースファイルをセットアップしています...")
+
+    strings_xml_content = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MyApp</string>
+    <string name="fcm_channel_name">通知</string>
+    <string name="fcm_channel_description">アプリからの通知</string>
+    <string name="error_email_already_registered">このメールアドレスは既に登録されています</string>
+    <string name="error_user_not_found">ユーザーが見つかりません</string>
+    <string name="error_network">ネットワークエラーが発生しました</string>
+    <string name="error_validation">入力エラー</string>
+    <string name="validation_email_empty">メールアドレスを入力してください</string>
+    <string name="validation_email_invalid">メールアドレスの形式が正しくありません</string>
+    <string name="validation_password_empty">パスワードを入力してください</string>
+    <string name="validation_password_too_short">パスワードが短すぎます</string>
+    <string name="error_update_last_login">最終ログイン時刻の更新に失敗しました</string>
+    <string name="error_fetch_users">ユーザー情報の取得に失敗しました</string>
+    <string name="error_check_user">ユーザー確認に失敗しました</string>
+    <string name="error_get_user">ユーザー情報の取得に失敗しました</string>
+    <string name="error_delete_account">アカウントの削除に失敗しました</string>
+    <string name="error_delete_todos">TODOの削除に失敗しました</string>
+    <string name="auth_error_weak_password">パスワードが弱すぎます</string>
+    <string name="auth_error_invalid_email">無効なメールアドレスです</string>
+    <string name="auth_error_email_already_in_use">このメールアドレスは既に使用されています</string>
+    <string name="auth_error_invalid_credentials">認証情報が無効です</string>
+    <string name="auth_error_user_not_found">ユーザーが見つかりません</string>
+    <string name="auth_error_unknown">不明なエラーが発生しました</string>
+    <string name="auth_error_google_sign_in_failed">Googleサインインに失敗しました</string>
+</resources>
+"""
+
+    strings_xml_path = os.path.join(args.output_dir, 'app/src/main/res/values/strings.xml')
+
+    try:
+        # values ディレクトリが存在することを確認
+        os.makedirs(os.path.dirname(strings_xml_path), exist_ok=True)
+
+        # strings.xml を作成
+        with open(strings_xml_path, 'w') as f:
+            f.write(strings_xml_content)
+
+        print("strings.xmlを作成しました")
+    except Exception as e:
+        print(f"警告: リソースファイルの作成中にエラーが発生しました: {e}")
+
 def main():
     """メイン関数"""
     try:
@@ -1158,13 +1256,17 @@ def main():
         print(f"変換元: {args.from_dir}")
         print(f"出力先: {args.output_dir}")
         print(f"パッケージ名: {args.package_name}")
-        print(f"アプリ名: {args.app_name}")
 
         # プロジェクト構造をセットアップ
         package_dir = setup_project_structure(args)
-        if not package_dir or not os.path.exists(package_dir):
-            print(f"エラー: パッケージディレクトリの作成に失敗しました: {package_dir}")
+        if not package_dir:
             return
+
+        # Gradleファイルをセットアップ
+        setup_gradle(args, {})
+
+        # リソースファイルをセットアップ
+        setup_resources(args)
 
         # Swift プロジェクトを解析
         try:
@@ -1273,28 +1375,17 @@ def main():
             import traceback
             traceback.print_exc()
 
-        # Gradle ファイルをセットアップ
-        try:
-            print("Gradleファイルをセットアップしています...")
-            setup_gradle(args.output_dir, project_info, args.package_name, args.app_name)
-            print("Gradleファイルのセットアップが完了しました")
-        except Exception as e:
-            print(f"警告: Gradleファイルのセットアップ中にエラーが発生しました: {e}")
-            import traceback
-            traceback.print_exc()
-
         print("\n変換が完了しました！")
         print(f"生成されたプロジェクトは {os.path.abspath(args.output_dir)} にあります。")
         print("\n次のステップ:")
         print("1. Android Studioでプロジェクトを開く")
         print("2. Gradleの同期を実行する")
         print("3. 必要に応じてコードを調整する")
-        print("\n注意: 自動変換されたコードは手動での確認と調整が必要な場合があります。")
+
     except Exception as e:
         print(f"エラー: 変換処理中に予期しないエラーが発生しました: {e}")
         import traceback
         traceback.print_exc()
-        print("\n変換プロセスは完了しませんでした。上記のエラーを修正して再試行してください。")
         sys.exit(1)
 
 if __name__ == "__main__":
