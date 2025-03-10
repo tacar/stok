@@ -275,6 +275,16 @@ def swift_type_to_kotlin(swift_type: str) -> str:
         'None': 'Unit',  # Swift の None を Kotlin の Unit に変換
         'T': 'T',  # ジェネリック型パラメータ
         'Value': 'Any',  # 一般的な値型
+        'TimeInterval': 'Long',  # Swift の TimeInterval を Kotlin の Long に変換
+        'CGFloat': 'Float',  # Swift の CGFloat を Kotlin の Float に変換
+        'NSTimeInterval': 'Long',  # Swift の NSTimeInterval を Kotlin の Long に変換
+        'UIImage': 'android.graphics.Bitmap',  # Swift の UIImage を Kotlin の Bitmap に変換
+        'UIColor': 'androidx.compose.ui.graphics.Color',  # Swift の UIColor を Kotlin の Color に変換
+        'UIFont': 'androidx.compose.ui.text.TextStyle',  # Swift の UIFont を Kotlin の TextStyle に変換
+        'UIView': 'android.view.View',  # Swift の UIView を Kotlin の View に変換
+        'UIViewController': 'androidx.fragment.app.Fragment',  # Swift の UIViewController を Kotlin の Fragment に変換
+        'UITableView': 'androidx.recyclerview.widget.RecyclerView',  # Swift の UITableView を Kotlin の RecyclerView に変換
+        'UICollectionView': 'androidx.recyclerview.widget.RecyclerView',  # Swift の UICollectionView を Kotlin の RecyclerView に変換
     }
 
     # オプショナル型の処理
@@ -343,6 +353,13 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
     kotlin_parameters = ""
     if parameters:
         param_parts = []
+
+        # Swift形式の辞書型パラメータを処理（[String: Any]など）
+        if '[' in parameters and ':' in parameters and ']' in parameters:
+            # [String: Any]形式を処理
+            dict_pattern = r'\[(\w+):\s*(\w+)\]'
+            parameters = re.sub(dict_pattern, r'Map<\1, \2>', parameters)
+
         for param in parameters.split(','):
             param = param.strip()
 
@@ -350,12 +367,17 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
             if param.startswith('_'):
                 param = param[1:].strip()
 
-            # didFailToReceiveAdWithError error: Error のような形式を処理
+            # 引数ラベルを処理（from userInput: String → userInput: String）
             if ' ' in param and ':' in param:
                 parts = param.split(' ')
+                # 最後の部分に型情報がある場合
                 last_part = parts[-1]
                 if ':' in last_part:
-                    param = last_part
+                    # 引数ラベルと引数名を分離
+                    if len(parts) >= 2:
+                        # 引数名を取得（最後の部分）
+                        param_name_with_type = last_part
+                        param = param_name_with_type
 
             if ':' in param:
                 # Swift のパラメータ形式: name: Type または label name: Type
@@ -364,11 +386,22 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
                     param_name, param_type = parts
                     param_name = param_name.strip()
                     param_type = param_type.strip()
+
+                    # 特殊なSwift型を処理
+                    if param_type == '[String: Any]':
+                        param_type = 'Map<String, Any>'
+                    elif param_type == '[String: String]':
+                        param_type = 'Map<String, String>'
+                    elif param_type == '[Int: Any]':
+                        param_type = 'Map<Int, Any>'
+                    elif param_type == '[Int: String]':
+                        param_type = 'Map<Int, String>'
+
                     kotlin_param_type = swift_type_to_kotlin(param_type)
                     param_parts.append(f"{param_name}: {kotlin_param_type}")
                 elif len(parts) == 3:
                     # ラベル付きパラメータの場合
-                    _, param_name, param_type = parts
+                    label, param_name, param_type = parts
                     param_name = param_name.strip()
                     param_type = param_type.strip()
                     kotlin_param_type = swift_type_to_kotlin(param_type)
@@ -382,6 +415,16 @@ def swift_method_to_kotlin(method_name: str, parameters: str, return_type: Optio
     # 戻り値の型の変換
     kotlin_return_type = None
     if return_type:
+        # 特殊なSwift型を処理
+        if return_type == '[String: Any]':
+            return_type = 'Map<String, Any>'
+        elif return_type == '[String: String]':
+            return_type = 'Map<String, String>'
+        elif return_type == '[Int: Any]':
+            return_type = 'Map<Int, Any>'
+        elif return_type == '[Int: String]':
+            return_type = 'Map<Int, String>'
+
         kotlin_return_type = swift_type_to_kotlin(return_type)
 
         # None型をUnitに変換

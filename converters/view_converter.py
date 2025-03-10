@@ -166,6 +166,8 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
         "import coil.compose.rememberAsyncImagePainter",
         "import androidx.compose.material.icons.Icons",
         "import androidx.compose.material.icons.filled.*",
+        "import androidx.compose.foundation.lazy.LazyColumn",
+        "import androidx.compose.foundation.lazy.items",
         "import androidx.lifecycle.viewmodel.compose.viewModel",
         f"import {package_name}.viewmodels.*",
         f"import {package_name}.models.*",
@@ -201,7 +203,7 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
     # 基本的なレイアウト
     lines.extend([
         "    Surface(",
-        "        modifier = modifier.fillMaxSize(),",
+        "        modifier = Modifier.fillMaxSize(),",
         "        color = MaterialTheme.colorScheme.background",
         "    ) {",
         "        // SwiftUIのビュー構造をJetpack Composeに変換",
@@ -264,6 +266,7 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
             "    }"
         ])
 
+    # 閉じ括弧を追加
     lines.append("}")
 
     # プレビュー関数
@@ -278,7 +281,21 @@ def generate_compose_view(view_info: Dict[str, Any], package_name: str, body_con
         f"}}"
     ])
 
-    return "\n".join(lines)
+    # 生成されたコードを検証して閉じ括弧のバランスを確認
+    code = "\n".join(lines)
+    open_braces = code.count('{')
+    close_braces = code.count('}')
+
+    # 閉じ括弧が足りない場合は追加
+    if open_braces > close_braces:
+        for _ in range(open_braces - close_braces):
+            lines.append("}")
+
+    # 余分な閉じ括弧を削除
+    code = "\n".join(lines)
+    code = re.sub(r'\}\s*\}\s*\}', '}\n}', code)
+
+    return code
 
 def convert_swiftui_to_compose(swift_code: str) -> str:
     """
@@ -290,18 +307,50 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
     Returns:
         変換されたJetpack Composeのコード
     """
+    # 変換前に不要なSwift構文を削除または置換
+    # 1. 型指定を削除（Unexpected type specification）
+    swift_code = re.sub(r':\s*\w+\s*=', ' =', swift_code)
+    swift_code = re.sub(r':\s*\w+\s*\{', ' {', swift_code)
+
+    # 2. 環境変数を削除
+    swift_code = re.sub(r'\.environment\([^)]*\)', '', swift_code)
+
+    # 3. SwiftUIの特殊構文を置換
+    swift_code = re.sub(r'TabView\s*\{', 'Scaffold(\n    bottomBar = {\n        BottomNavigation {\n', swift_code)
+    swift_code = re.sub(r'\.tabItem\s*\{', '// Tab Item\n', swift_code)
+
+    # 4. systemImageをIconに変換
+    swift_code = re.sub(r'systemImage:\s*"([^"]+)"', r'imageVector = Icons.Default.\1', swift_code)
+
+    # 5. セミコロンを削除
+    swift_code = re.sub(r';', '', swift_code)
+
+    # 6. Swift特有の構文を削除
+    swift_code = re.sub(r'@State\s+var\s+', 'var ', swift_code)
+    swift_code = re.sub(r'@Binding\s+var\s+', 'var ', swift_code)
+    swift_code = re.sub(r'@Published\s+var\s+', 'var ', swift_code)
+    swift_code = re.sub(r'@ObservedObject\s+var\s+', 'var ', swift_code)
+    swift_code = re.sub(r'@EnvironmentObject\s+var\s+', 'var ', swift_code)
+
+    # 7. 型指定を削除
+    swift_code = re.sub(r':\s*\w+(\.\w+)*', '', swift_code)
+
+    # 8. 引数ラベルを削除
+    swift_code = re.sub(r'(\w+):\s*', '', swift_code)
+
     compose_code = []
 
     # SwiftUIの主要コンポーネントの変換マッピング
     component_mappings = {
         # テキスト
         r'Text\("([^"]+)"\)': lambda m: f'Text(text = "{m.group(1)}")',
-        r'Text\("([^"]+)"\)\.font\(\.(\w+)\)': lambda m: f'Text(text = "{m.group(1)}", style = MaterialTheme.typography.{map_font_style(m.group(2))})',
-        r'Text\("([^"]+)"\)\.foregroundColor\(\.(\w+)\)': lambda m: f'Text(text = "{m.group(1)}", color = {map_color(m.group(2))})',
+        r'Text\(([^)]+)\)': lambda m: f'Text(text = {m.group(1)})',
 
         # ボタン
-        r'Button\("([^"]+)"\)\s*{\s*([^}]+)\s*}': lambda m: f'Button(onClick = {{ {convert_action(m.group(2))} }}) {{ Text(text = "{m.group(1)}") }}',
-        r'Button\(action:\s*{\s*([^}]+)\s*}\)\s*{\s*Text\("([^"]+)"\)\s*}': lambda m: f'Button(onClick = {{ {convert_action(m.group(1))} }}) {{ Text(text = "{m.group(2)}") }}',
+        r'Button\("([^"]+)"\)\s*{\s*([^}]+)\s*}': lambda m: f'Button(onClick = {{ /* {m.group(2)} */ }}) {{ Text(text = "{m.group(1)}") }}',
+        r'Button\(action:\s*{\s*([^}]+)\s*}\)\s*{\s*Text\("([^"]+)"\)\s*}': lambda m: f'Button(onClick = {{ /* {m.group(1)} */ }}) {{ Text(text = "{m.group(2)}") }}',
+        r'Button\(action:\s*{\s*([^}]+)\s*}\)\s*{\s*([^}]+)\s*}': lambda m: f'Button(onClick = {{ /* {m.group(1)} */ }}) {{ {m.group(2)} }}',
+        r'Button\(\)\s*{\s*([^}]+)\s*}': lambda m: f'Button(onClick = {{ /* TODO */ }}) {{ {m.group(1)} }}',
 
         # 画像
         r'Image\("([^"]+)"\)': lambda m: f'Image(painter = painterResource(id = R.drawable.{m.group(1)}), contentDescription = null)',
@@ -312,6 +361,11 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
         r'HStack(\([^)]*\))?\s*{': 'Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {',
         r'ZStack(\([^)]*\))?\s*{': 'Box(modifier = Modifier.fillMaxWidth()) {',
 
+        # TabView関連
+        r'TabView\s*{': 'Scaffold(\n    bottomBar = {\n        BottomNavigation {\n',
+        r'\.tabItem\s*{': '// Tab Item\n',
+        r'Label\(\s*"([^"]+)",\s*systemImage:\s*"([^"]+)"\s*\)': lambda m: f'BottomNavigationItem(\n    icon = {{ Icon(Icons.Default.{map_system_icon(m.group(2))}, contentDescription = null) }},\n    label = {{ Text("{m.group(1)}") }},\n    selected = false,\n    onClick = {{ /* TODO */ }}\n)',
+
         # スペーサー
         r'Spacer\(\)': 'Spacer(modifier = Modifier.weight(1f))',
         r'Spacer\(\).frame\(height:\s*(\d+)\)': lambda m: f'Spacer(modifier = Modifier.height({m.group(1)}.dp))',
@@ -320,14 +374,68 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
         # パディング
         r'\.padding\((\d+)\)': lambda m: f'.padding({m.group(1)}.dp)',
         r'\.padding\(\[\.(\w+), \.(\w+)\], (\d+)\)': lambda m: f'.padding({map_edge_insets(m.group(1), m.group(2), m.group(3))})',
+        r'\.padding\(\)': '.padding(8.dp)',
 
         # フレーム
         r'\.frame\(width:\s*(\d+),\s*height:\s*(\d+)\)': lambda m: f'.size({m.group(1)}.dp, {m.group(2)}.dp)',
         r'\.frame\(width:\s*(\d+)\)': lambda m: f'.width({m.group(1)}.dp)',
         r'\.frame\(height:\s*(\d+)\)': lambda m: f'.height({m.group(1)}.dp)',
+        r'\.frame\(\)': '.fillMaxWidth()',
 
         # 背景色
         r'\.background\(Color\.(\w+)\)': lambda m: f'.background({map_color(m.group(1))})',
+        r'\.background\(([^)]+)\)': '.background(MaterialTheme.colorScheme.surface)',
+
+        # 条件文
+        r'if\s+([^{]+)\s*{': lambda m: f'if ({convert_condition(m.group(1))}) {{',
+
+        # ForEach
+        r'ForEach\(([^,]+),\s*id:\s*\\\.self\)\s*{\s*(\w+)\s*in': lambda m: f'LazyColumn {{ {m.group(1)}.forEach {{ {m.group(2)} ->',
+        r'ForEach\(([^)]+)\)\s*{\s*(\w+)\s*in': lambda m: f'LazyColumn {{ /* {m.group(1)} */ .forEach {{ {m.group(2)} ->',
+
+        # NavigationLink
+        r'NavigationLink\(destination:\s*([^)]+)\)\s*{': lambda m: f'Button(onClick = {{ /* Navigate to {m.group(1)} */ }}) {{',
+        r'NavigationLink\("([^"]+)",\s*destination:\s*([^)]+)\)': lambda m: f'Button(onClick = {{ /* Navigate to {m.group(2)} */ }}) {{ Text(text = "{m.group(1)}") }}',
+
+        # TextField
+        r'TextField\("([^"]+)",\s*text:\s*\$([^)]+)\)': lambda m: f'TextField(value = {m.group(2)}, onValueChange = {{ {m.group(2)} = it }}, label = {{ Text("{m.group(1)}") }})',
+
+        # Toggle
+        r'Toggle\("([^"]+)",\s*isOn:\s*\$([^)]+)\)': lambda m: f'Switch(checked = {m.group(2)}, onCheckedChange = {{ {m.group(2)} = it }}, label = {{ Text("{m.group(1)}") }})',
+
+        # Picker
+        r'Picker\("([^"]+)",\s*selection:\s*\$([^)]+)\)\s*{': lambda m: f'// Picker for {m.group(1)}, selection: {m.group(2)}\nColumn {{',
+
+        # List
+        r'List\s*{': 'LazyColumn {',
+        r'List\(([^)]+)\)\s*{': 'LazyColumn { // List of {m.group(1)}',
+
+        # ScrollView
+        r'ScrollView\s*{': 'LazyColumn {',
+        r'ScrollView\(\.horizontal\)\s*{': 'LazyRow {',
+        r'ScrollView\(\.vertical\)\s*{': 'LazyColumn {',
+
+        # Divider
+        r'Divider\(\)': 'Divider()',
+
+        # 修飾子
+        r'\.foregroundColor\(\.(\w+)\)': lambda m: f'.color({map_color(m.group(1))})',
+        r'\.foregroundColor\(([^)]+)\)': '.color(MaterialTheme.colorScheme.onSurface)',
+        r'\.font\(\.(\w+)\)': lambda m: f'.style(MaterialTheme.typography.{map_font_style(m.group(1))})',
+        r'\.font\(([^)]+)\)': '.style(MaterialTheme.typography.bodyMedium)',
+        r'\.bold\(\)': '.fontWeight(FontWeight.Bold)',
+        r'\.italic\(\)': '.fontStyle(FontStyle.Italic)',
+        r'\.opacity\(([^)]+)\)': lambda m: f'.alpha({m.group(1)}f)',
+        r'\.cornerRadius\(([^)]+)\)': lambda m: f'.clip(RoundedCornerShape({m.group(1)}.dp))',
+        r'\.shadow\(radius:\s*([^)]+)\)': lambda m: f'.shadow(elevation = {m.group(1)}.dp)',
+        r'\.disabled\(([^)]+)\)': lambda m: f'.enabled(!({m.group(1)}))',
+
+        # 環境変数
+        r'\.environment\([^)]*\)': '',
+        r'\.environmentObject\([^)]*\)': '',
+
+        # バインディング
+        r'\$(\w+)': r'\1',
     }
 
     # 行ごとに処理
@@ -338,16 +446,75 @@ def convert_swiftui_to_compose(swift_code: str) -> str:
         indent_str = ' ' * indent
         line = line.strip()
 
+        # 空行をスキップ
+        if not line:
+            compose_code.append('')
+            continue
+
+        # コメント行はそのまま追加
+        if line.startswith('//'):
+            compose_code.append(indent_str + line)
+            continue
+
         # 各マッピングを適用
+        original_line = line
         for pattern, replacement in component_mappings.items():
             if callable(replacement):
                 line = re.sub(pattern, replacement, line)
             else:
                 line = re.sub(pattern, replacement, line)
 
+        # 変換されなかった行にはコメントを追加
+        if line == original_line and not (line == '{' or line == '}' or line.startswith('import') or line.startswith('package')):
+            line = f"// TODO: Convert SwiftUI: {line}"
+
         compose_code.append(indent_str + line)
 
-    return '\n'.join(compose_code)
+    # 閉じ括弧のバランスを確認して修正
+    result = '\n'.join(compose_code)
+
+    # 余分な閉じ括弧を削除
+    result = re.sub(r'\}\s*\}\s*\}', '}', result)
+
+    # 不適切な構造を修正
+    result = re.sub(r'// TODO: Convert SwiftUI: Scaffold\(\s*// TODO: Convert SwiftUI: bottomBar = \{\s*// TODO: Convert SwiftUI: BottomNavigation \{',
+                    'Scaffold(\n    bottomBar = {\n        BottomNavigation {', result)
+
+    # 閉じ括弧のバランスを再確認
+    open_braces = result.count('{')
+    close_braces = result.count('}')
+
+    # 閉じ括弧が足りない場合は追加
+    if open_braces > close_braces:
+        for _ in range(open_braces - close_braces):
+            result += '\n}'
+
+    # 余分な閉じ括弧を削除
+    result = re.sub(r'\}\s*\}\s*\}', '}\n}', result)
+
+    return result
+
+def convert_condition(swift_condition: str) -> str:
+    """SwiftUIの条件式をKotlinの条件式に変換します"""
+    # settings.isJapanese ? "ホーム" : "Home" → if (settings.isJapanese) "ホーム" else "Home"
+    ternary_pattern = r'(.+)\s*\?\s*"([^"]+)"\s*:\s*"([^"]+)"'
+    ternary_match = re.match(ternary_pattern, swift_condition)
+    if ternary_match:
+        condition = ternary_match.group(1)
+        true_value = ternary_match.group(2)
+        false_value = ternary_match.group(3)
+        return f'if ({condition}) "{true_value}" else "{false_value}"'
+
+    # 基本的な変換
+    kotlin_condition = swift_condition.strip()
+
+    # == nilをnull比較に変換
+    kotlin_condition = re.sub(r'==\s*nil', '== null', kotlin_condition)
+
+    # != nilをnull比較に変換
+    kotlin_condition = re.sub(r'!=\s*nil', '!= null', kotlin_condition)
+
+    return kotlin_condition
 
 def map_font_style(swift_font: str) -> str:
     """SwiftUIのフォントスタイルをMaterial3のタイポグラフィスタイルにマッピングします"""

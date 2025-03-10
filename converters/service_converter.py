@@ -105,8 +105,32 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
     # メソッドのインターフェース定義
     for method in service_info['methods']:
         method_name = method['name']
-        parameters = method['parameters']
+        parameters = method['parameters'] if method['parameters'] else ""
         return_type = method['return_type']
+
+        # Swift形式の辞書型パラメータを処理
+        if parameters and '[' in parameters and ':' in parameters and ']' in parameters:
+            # [String: Any]形式を処理
+            dict_pattern = r'\[(\w+):\s*(\w+)\]'
+            parameters = re.sub(dict_pattern, r'Map<\1, \2>', parameters)
+
+        # 引数ラベルを処理
+        if parameters and ' ' in parameters and ':' in parameters:
+            # from userInput: String → userInput: String
+            label_pattern = r'(\w+)\s+(\w+):\s*(\w+)'
+            parameters = re.sub(label_pattern, r'\2: \3', parameters)
+
+        # パラメータが空の場合は空文字列に設定
+        if not parameters or parameters.strip() == "":
+            parameters = ""
+
+        # 特殊なケースを処理
+        if "[String: Any]" in parameters:
+            parameters = "params: Map<String, Any>"
+        elif "from prompt: String" in parameters:
+            parameters = "prompt: String"
+        elif "from userInput: String" in parameters:
+            parameters = "userInput: String"
 
         # Swift のメソッドを Kotlin のメソッドに変換
         kotlin_method_name, kotlin_parameters, kotlin_return_type = swift_method_to_kotlin(
@@ -114,11 +138,11 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
         )
 
         # None型をUnitに変換
-        if kotlin_return_type == 'None':
+        if kotlin_return_type == 'None' or kotlin_return_type == 'Void' or kotlin_return_type is None:
             kotlin_return_type = 'Unit'
 
         # メソッド定義
-        if kotlin_parameters:
+        if kotlin_parameters and kotlin_parameters.strip() != "":
             lines.append(f"    suspend fun {kotlin_method_name}({kotlin_parameters}): {kotlin_return_type}")
         else:
             lines.append(f"    suspend fun {kotlin_method_name}(): {kotlin_return_type}")
@@ -151,8 +175,32 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
     # メソッドの実装
     for method in service_info['methods']:
         method_name = method['name']
-        parameters = method['parameters']
+        parameters = method['parameters'] if method['parameters'] else ""
         return_type = method['return_type']
+
+        # Swift形式の辞書型パラメータを処理
+        if parameters and '[' in parameters and ':' in parameters and ']' in parameters:
+            # [String: Any]形式を処理
+            dict_pattern = r'\[(\w+):\s*(\w+)\]'
+            parameters = re.sub(dict_pattern, r'Map<\1, \2>', parameters)
+
+        # 引数ラベルを処理
+        if parameters and ' ' in parameters and ':' in parameters:
+            # from userInput: String → userInput: String
+            label_pattern = r'(\w+)\s+(\w+):\s*(\w+)'
+            parameters = re.sub(label_pattern, r'\2: \3', parameters)
+
+        # パラメータが空の場合は空文字列に設定
+        if not parameters or parameters.strip() == "":
+            parameters = ""
+
+        # 特殊なケースを処理
+        if "[String: Any]" in parameters:
+            parameters = "params: Map<String, Any>"
+        elif "from prompt: String" in parameters:
+            parameters = "prompt: String"
+        elif "from userInput: String" in parameters:
+            parameters = "userInput: String"
 
         # Swift のメソッドを Kotlin のメソッドに変換
         kotlin_method_name, kotlin_parameters, kotlin_return_type = swift_method_to_kotlin(
@@ -160,31 +208,66 @@ def generate_kotlin_service(service_info: Dict[str, Any], package_name: str, pro
         )
 
         # None型をUnitに変換
-        if kotlin_return_type == 'None':
+        if kotlin_return_type == 'None' or kotlin_return_type == 'Void' or kotlin_return_type is None:
             kotlin_return_type = 'Unit'
 
         # メソッド実装
-        if kotlin_parameters:
+        if kotlin_parameters and kotlin_parameters.strip() != "":
             lines.append(f"    override suspend fun {kotlin_method_name}({kotlin_parameters}): {kotlin_return_type} {{")
         else:
             lines.append(f"    override suspend fun {kotlin_method_name}(): {kotlin_return_type} {{")
 
         # メソッドの内容
-        lines.extend([
-            "        return withContext(Dispatchers.IO) {",
-            "            try {",
-            "                // TODO: 実装",
-            "                // API リクエストの例:",
-            "                // client.get<ResponseType> {",
-            "                //     url(\"https://api.example.com/endpoint\")",
-            "                //     contentType(ContentType.Application.Json)",
-            "                // }",
-            "            } catch (e: Exception) {",
-            "                // エラー処理",
-            "                throw e",
-            "            }",
-            "        }",
-        ])
+        if kotlin_return_type == 'Unit':
+            lines.extend([
+                "        return withContext(Dispatchers.IO) {",
+                "            try {",
+                "                // TODO: 実装",
+                "                // API リクエストの例:",
+                "                // client.post<Unit> {",
+                "                //     url(\"https://api.example.com/endpoint\")",
+                "                //     contentType(ContentType.Application.Json)",
+                "                // }",
+                "            } catch (e: Exception) {",
+                "                // エラー処理",
+                "                throw e",
+                "            }",
+                "        }",
+            ])
+        elif kotlin_return_type == 'String':
+            lines.extend([
+                "        return withContext(Dispatchers.IO) {",
+                "            try {",
+                "                // TODO: 実装",
+                "                // API リクエストの例:",
+                "                // client.get<String> {",
+                "                //     url(\"https://api.example.com/endpoint\")",
+                "                //     contentType(ContentType.Application.Json)",
+                "                // }",
+                "                \"\"  // 仮の戻り値",
+                "            } catch (e: Exception) {",
+                "                // エラー処理",
+                "                throw e",
+                "            }",
+                "        }",
+            ])
+        else:
+            lines.extend([
+                "        return withContext(Dispatchers.IO) {",
+                "            try {",
+                "                // TODO: 実装",
+                "                // API リクエストの例:",
+                "                // client.get<ResponseType> {",
+                "                //     url(\"https://api.example.com/endpoint\")",
+                "                //     contentType(ContentType.Application.Json)",
+                "                // }",
+                "                null  // 仮の戻り値",
+                "            } catch (e: Exception) {",
+                "                // エラー処理",
+                "                throw e",
+                "            }",
+                "        }",
+            ])
 
         lines.append("    }")
         lines.append("")

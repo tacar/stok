@@ -68,12 +68,31 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
     """
     class_name = model_info['class_name']
 
+    # ViewModel クラスの場合は特別な処理
+    is_viewmodel = class_name.endswith('ViewModel')
+
     # パッケージとインポート
-    lines = [
-        f"package {package_name}.models",
-        "",
-        "import kotlinx.serialization.Serializable"
-    ]
+    if is_viewmodel:
+        lines = [
+            f"package {package_name}.viewmodels",
+            "",
+            "import androidx.lifecycle.ViewModel",
+            "import androidx.lifecycle.viewModelScope",
+            "import kotlinx.coroutines.flow.MutableStateFlow",
+            "import kotlinx.coroutines.flow.StateFlow",
+            "import kotlinx.coroutines.flow.asStateFlow",
+            "import kotlinx.coroutines.launch",
+            f"import {package_name}.models.*",
+            f"import {package_name}.repositories.*",
+            "import javax.inject.Inject",
+            "import dagger.hilt.android.lifecycle.HiltViewModel"
+        ]
+    else:
+        lines = [
+            f"package {package_name}.models",
+            "",
+            "import kotlinx.serialization.Serializable"
+        ]
 
     # SwiftData を使用している場合は SQLDelight 用のインポートを追加
     if model_info['uses_swiftdata']:
@@ -85,7 +104,73 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
     lines.append("")
 
     # クラス定義
-    if model_info['is_struct'] or model_info['is_class']:
+    if is_viewmodel:
+        # ViewModel クラスの場合
+        lines.append("@HiltViewModel")
+        lines.append(f"class {class_name} @Inject constructor() : ViewModel() {{")
+
+        # 状態を表す StateFlow
+        lines.append("    // 状態")
+
+        # プロパティを追加
+        for prop in model_info['properties']:
+            prop_name = prop['name']
+            swift_type = prop['type']
+
+            # 型を推測
+            if "String" in swift_type:
+                kotlin_type = "String"
+            elif "Int" in swift_type:
+                kotlin_type = "Int"
+            elif "Bool" in swift_type or "Boolean" in swift_type:
+                kotlin_type = "Boolean"
+            elif "Float" in swift_type or "Double" in swift_type:
+                kotlin_type = "Float"
+            elif "Date" in swift_type:
+                kotlin_type = "java.util.Date"
+            elif "UUID" in swift_type:
+                kotlin_type = "java.util.UUID"
+            elif "List" in swift_type or "Array" in swift_type:
+                kotlin_type = "List<Any>"
+            elif "Map" in swift_type or "Dictionary" in swift_type:
+                kotlin_type = "Map<String, Any>"
+            else:
+                kotlin_type = "Any"
+
+            # Published プロパティを StateFlow に変換
+            if prop['is_published']:
+                lines.extend([
+                    f"    private val _{prop_name} = MutableStateFlow<{kotlin_type}>(/* 初期値 */)",
+                    f"    val {prop_name}: StateFlow<{kotlin_type}> = _{prop_name}.asStateFlow()",
+                    ""
+                ])
+            else:
+                lines.extend([
+                    f"    private val _{prop_name} = MutableStateFlow<{kotlin_type}>(/* 初期値 */)",
+                    f"    val {prop_name}: StateFlow<{kotlin_type}> = _{prop_name}",
+                    ""
+                ])
+
+        # 初期化ブロック
+        lines.extend([
+            "    init {",
+            "        // 初期化処理",
+            "        loadData()",
+            "    }",
+            "",
+            "    private fun loadData() {",
+            "        viewModelScope.launch {",
+            "            try {",
+            "                // TODO: データの読み込み処理",
+            "            } catch (e: Exception) {",
+            "                // エラー処理",
+            "            }",
+            "        }",
+            "    }",
+            "}"
+        ])
+    elif model_info['is_struct'] or model_info['is_class']:
+        # データクラスの場合
         lines.append("@Serializable")
         lines.append(f"data class {class_name}(")
 
@@ -120,6 +205,19 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
                         kotlin_type = f"Map<{kotlin_key_type}, {kotlin_value_type}>"
                     else:
                         kotlin_type = swift_type_to_kotlin(swift_type)
+            # Swift形式の辞書型を処理
+            elif "[" in swift_type and ":" in swift_type and "]" in swift_type and not "=" in swift_type:
+                # [String: Any]形式を処理
+                pattern = r'\[(\w+):\s*(\w+)\]'
+                match = re.match(pattern, swift_type)
+                if match:
+                    key_type = match.group(1)
+                    value_type = match.group(2)
+                    kotlin_key_type = swift_type_to_kotlin(key_type)
+                    kotlin_value_type = swift_type_to_kotlin(value_type)
+                    kotlin_type = f"Map<{kotlin_key_type}, {kotlin_value_type}>"
+                else:
+                    kotlin_type = swift_type_to_kotlin(swift_type)
             else:
                 kotlin_type = swift_type_to_kotlin(swift_type)
 
@@ -147,6 +245,8 @@ def generate_kotlin_model(model_info: Dict[str, Any], package_name: str) -> str:
                     default_value = " = false"
                 elif default_value == "true":
                     default_value = " = true"
+                elif default_value == "nil" or default_value == "null":
+                    default_value = " = null"
                 else:
                     default_value = ""
 
