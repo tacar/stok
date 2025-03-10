@@ -115,18 +115,36 @@ def parse_arguments():
                         help=f'Kotlin テンプレートディレクトリ (デフォルト: {DEFAULT_TEMPLATE_KOTLIN_DIR})')
     parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR,
                         help=f'出力先ディレクトリ (デフォルト: {DEFAULT_OUTPUT_DIR})')
-    parser.add_argument('--package-name', type=str, default="com.example.app",
-                        help='Android アプリのパッケージ名 (デフォルト: com.example.app)')
+    parser.add_argument('--package-name', type=str, default="com.company.amap",
+                        help='Android アプリのパッケージ名 (デフォルト: com.company.amap)')
     parser.add_argument('--app-name', type=str, default="MyApp",
                         help='アプリケーション名 (デフォルト: MyApp)')
     parser.add_argument('--clean', action='store_true',
                         help='出力先ディレクトリを事前にクリアする')
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    # パッケージ名を固定値から引数で受け取った値に変更
+    return args
 
 def setup_project_structure(args):
     """プロジェクト構造をセットアップします"""
     print(f"プロジェクト構造をセットアップしています...")
+
+    # build.gradle の namespace を設定
+    build_gradle_path = os.path.join(args.output_dir, 'app/build.gradle')
+    if os.path.exists(build_gradle_path):
+        with open(build_gradle_path, 'r') as f:
+            content = f.read()
+
+        # namespace を設定
+        content = re.sub(
+            r'namespace ["\'].*["\']',
+            f'namespace "{args.package_name}"',
+            content
+        )
+
+        with open(build_gradle_path, 'w') as f:
+            f.write(content)
 
     # 絶対パスに変換
     output_dir_abs = os.path.abspath(args.output_dir)
@@ -345,9 +363,10 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
     """SwiftUIビューをJetpack Composeに変換します"""
     print("ビューを変換しています...")
 
-    view_files = project_info.get('views', [])
+    # R クラスのインポートを追加
+    r_import = f"import {package_name}.R\n"
 
-    for view_file in view_files:
+    for view_file in project_info.get('views', []):
         try:
             swift_path = os.path.join(from_dir, view_file)
             if not os.path.exists(swift_path):
@@ -371,11 +390,11 @@ def convert_views(from_dir: str, package_dir: str, project_info: Dict[str, Any],
             os.makedirs(kotlin_dir, exist_ok=True)
             kotlin_path = os.path.join(kotlin_dir, kotlin_file_name)
 
-            # パッケージ名を生成
+            # パッケージ名を生成 - 固定値ではなく引数から取得
             package_path = f"{package_name}.{relative_path.replace('/', '.')}"
 
-            # SwiftUIコードをJetpack Composeに変換
-            kotlin_content = convert_swiftui_to_compose(swift_content, package_path)
+            # R クラスのインポートを追加
+            kotlin_content = r_import + convert_swiftui_to_compose(swift_content, package_path)
 
             # 変換されたコードを保存
             with open(kotlin_path, 'w', encoding='utf-8') as f:
@@ -393,7 +412,7 @@ def convert_swiftui_to_compose(swift_content: str, package_name: str) -> str:
         # コメントを削除
         swift_content = remove_comments(swift_content)
 
-        # パッケージ宣言とインポート文を生成
+        # パッケージ宣言とインポート文を生成 - 常に com.example.app を使用
         kotlin_content = f"""package {package_name}
 
 import androidx.compose.foundation.layout.*
@@ -406,6 +425,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.app.R
 
 """
         # struct定義を検出
@@ -437,12 +457,7 @@ fun {struct_name}(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {{
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {{
-            {body_content}
-        }}
+        {body_content}
     }}
 }}
 
@@ -474,10 +489,14 @@ def extract_properties(content: str) -> List[Dict[str, str]]:
     for pattern, prop_type in property_patterns:
         matches = re.finditer(pattern, content)
         for match in matches:
+            default_value = None
+            if match.group(3):
+                default_value = match.group(3)
+
             properties.append({
                 'name': match.group(1),
                 'type': match.group(2),
-                'default': match.group(3) if match.group(3) else None,
+                'default': default_value,
                 'property_type': prop_type
             })
 
@@ -489,7 +508,10 @@ def convert_properties_to_state(properties: List[Dict[str, str]]) -> str:
 
     for prop in properties:
         kotlin_type = convert_type(prop['type'])
-        default_value = prop['default'] if prop['default'] else get_default_value(kotlin_type)
+        if prop['default']:
+            default_value = prop['default']
+        else:
+            default_value = get_default_value(kotlin_type)
 
         if prop['property_type'] == 'State':
             state_declarations.append(
@@ -618,7 +640,7 @@ def convert_foreach(items: str, content: str) -> str:
 
 def generate_compose_imports(package_name: str) -> str:
     """必要なインポート文を生成します"""
-    return f"""package {package_name}.ui.screens
+    return f"""package com.example.app.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -755,7 +777,10 @@ def extract_state_variables(body: str) -> str:
     for match in re.finditer(state_pattern, body):
         name = match.group(1)
         type_name = convert_type(match.group(2))
-        default_value = match.group(3) if match.group(3) else get_default_value(type_name)
+        if match.group(3):
+            default_value = match.group(3)
+        else:
+            default_value = get_default_value(type_name)
 
         state_vars.append(
             f"var {name} by remember {{ mutableStateOf<{type_name}>({default_value}) }}"
@@ -786,7 +811,10 @@ def extract_view_content(body: str) -> str:
 def convert_state_property(name: str, type_name: str, default_value: str = None) -> str:
     """State プロパティを変換します"""
     kotlin_type = convert_type(type_name)
-    default = default_value if default_value else get_default_value(kotlin_type)
+    if default_value:
+        default = default_value
+    else:
+        default = get_default_value(kotlin_type)
     return f"var {name} by remember {{ mutableStateOf<{kotlin_type}>({default}) }}"
 
 def convert_basic_components(content: str) -> str:
@@ -823,7 +851,7 @@ def convert_basic_components(content: str) -> str:
             content
         )
 
-        # Image
+        # Image - 文字列のlower()メソッドを使用
         content = re.sub(
             r'Image\s*\("([^"]+)"\)',
             lambda m: f'Image(painter = painterResource(id = R.drawable.{m.group(1).lower()}), contentDescription = null)',
@@ -864,15 +892,25 @@ def convert_special_components(content: str) -> str:
         print(f"警告: 特殊コンポーネントの変換中にエラーが発生しました: {e}")
         return content
 
-def convert_navigation_link(destination: str, content: str) -> str:
+def convert_navigation_link(destination: str) -> str:
     """NavigationLinkを変換します"""
     try:
-        route = convert_destination(destination)
+        # 単純な変換として、destinationをそのまま使用
+        route = destination.strip()
+        # クォートを削除
+        if route.startswith('"') and route.endswith('"'):
+            route = route[1:-1]
+        # 括弧を削除
+        if route.endswith("()"):
+            route = route[:-2]
+        # 小文字に変換して最初の文字を小文字に
+        route = route.lower()
+
         return f'''TextButton(
             onClick = {{ navController.navigate("{route}") }},
             modifier = Modifier.fillMaxWidth()
         ) {{
-            {convert_layout_content(content)}
+            {convert_layout_content(destination)}
         }}'''
     except Exception as e:
         print(f"警告: NavigationLinkの変換中にエラーが発生しました: {e}")
@@ -884,11 +922,19 @@ def convert_alert(binding: str, content: str) -> str:
         title = re.search(r'Text\s*\("([^"]+)"\)', content)
         message = re.search(r'message:\s*"([^"]+)"', content)
 
+        title_text = "Alert"
+        if title:
+            title_text = title.group(1)
+
+        message_text = ""
+        if message:
+            message_text = message.group(1)
+
         return f'''if ({binding}) {{
             AlertDialog(
                 onDismissRequest = {{ {binding} = false }},
-                title = {{ Text(text = "{title.group(1) if title else 'Alert'}") }},
-                text = {{ Text(text = "{message.group(1) if message else ''}") }},
+                title = {{ Text(text = "{title_text}") }},
+                text = {{ Text(text = "{message_text}") }},
                 confirmButton = {{
                     TextButton(onClick = {{ {binding} = false }}) {{
                         Text(text = "OK")
@@ -1006,6 +1052,102 @@ def convert_system_icon(icon_name: str) -> str:
     }
 
     return icon_mapping.get(icon_name, 'Default')
+
+def convert_type(swift_type: str) -> str:
+    """Swiftの型をKotlinの型に変換します"""
+    return SWIFT_TO_KOTLIN_TYPE_MAPPINGS.get(swift_type.strip(), 'Any')
+
+def setup_database(output_dir: str, package_dir: str, project_info: Dict[str, Any], package_name: str):
+    """データベースをセットアップします"""
+    try:
+        # SQLDelightのディレクトリを作成
+        sqldelight_dir = os.path.join(output_dir, 'app/src/main/sqldelight')
+        database_dir = os.path.join(sqldelight_dir, package_name.split('.')[-1] + 'Database')
+        ensure_directory(database_dir)
+
+        # 重複を避けるため、既存のデータベースファイルを削除
+        if os.path.exists(database_dir):
+            shutil.rmtree(database_dir)
+
+        # データベースのセットアップ
+        tables = {
+            'EditView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'SubscriptionView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'CalendarView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'HomeView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'WorkoutItem': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'StatsView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'Encouragement': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'Calendar': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'AppTabView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'SwiftUICode': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'Translation': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'AppUpdateView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'EncouragementView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'Settings': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'WorkoutType': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'SwiftUICodeView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL'),
+            'SettingsView': ('id TEXT PRIMARY KEY NOT NULL', 'data TEXT NOT NULL')
+        }
+
+        # 各テーブルのSQLファイルを生成
+        for table_name, columns in tables.items():
+            sql_file = os.path.join(database_dir, f'{table_name}.sq')
+            column_definitions = ',\n    '.join(columns)
+            sql_content = (
+                f"-- {table_name}.sq\n"
+                f"CREATE TABLE {table_name} (\n"
+                f"    {column_definitions},\n"
+                f"    created_at INTEGER NOT NULL,\n"
+                f"    updated_at INTEGER NOT NULL\n"
+                f");\n\n"
+                f"selectAll:\n"
+                f"SELECT *\n"
+                f"FROM {table_name};\n\n"
+                f"insertItem:\n"
+                f"INSERT INTO {table_name}(id, data, created_at, updated_at)\n"
+                f"VALUES (?, ?, ?, ?);\n\n"
+                f"updateItem:\n"
+                f"UPDATE {table_name}\n"
+                f"SET data = ?, updated_at = ?\n"
+                f"WHERE id = ?;\n\n"
+                f"deleteItem:\n"
+                f"DELETE FROM {table_name}\n"
+                f"WHERE id = ?;\n"
+            )
+            with open(sql_file, 'w') as f:
+                f.write(sql_content)
+
+        # build.gradleにSQLDelightの設定を追加
+        build_gradle_path = os.path.join(output_dir, 'app/build.gradle')
+        with open(build_gradle_path, 'r') as f:
+            content = f.read()
+
+        if 'sqldelight' not in content:
+            # SQLDelightプラグインの設定を追加
+            content = content.replace(
+                'plugins {',
+                'plugins {\n    id "com.squareup.sqldelight"'
+            )
+
+            # SQLDelightの設定を追加
+            content += (
+                f"\n\nsqldelight {{\n"
+                f"    MyAppDatabase {{\n"
+                f'        packageName = "{package_name}.data.local"\n'
+                f'        sourceFolders = ["sqldelight"]\n'
+                f'        schemaOutputDirectory = file("src/main/sqldelight/databases")\n'
+                f"    }}\n"
+                f"}}\n"
+            )
+            with open(build_gradle_path, 'w') as f:
+                f.write(content)
+
+        print(f"データベースのセットアップが完了しました: {database_dir}")
+    except Exception as e:
+        print(f"警告: データベースのセットアップ中にエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
 
 def main():
     """メイン関数"""
@@ -1156,5 +1298,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
     main()
